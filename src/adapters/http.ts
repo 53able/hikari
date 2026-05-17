@@ -1,10 +1,17 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Registry } from '../core/registry.js';
 import type { Engine, ExecutionOptions } from '../core/execution.js';
-import { CapabilityNotFoundError, ValidationError } from '../core/execution.js';
+import {
+  CapabilityNotFoundError,
+  ValidationError,
+  IdempotencyConflictError,
+} from '../core/execution.js';
 import { PolicyViolationError } from '../core/policy.js';
 import { ApprovalDeniedError } from '../core/approval.js';
 import { buildCapabilityMeta, buildRegistryMeta, type CapabilityMeta } from '../core/cap-meta.js';
+import { exportOpenApiDocument } from '../core/openapi-export.js';
+import type { RateLimitGuard } from '../core/rate-limit.js';
+import { clientIpFromRequest } from '../core/rate-limit.js';
 
 export type { CapabilityMeta };
 
@@ -18,6 +25,8 @@ export interface HttpAdapterOptions {
   maxBodyBytes?: number;
   /** CORS オリジンの許可リスト。リストに含まれるオリジンにのみ `Access-Control-Allow-Origin` / `Allow-Methods` / `Allow-Headers` を返す。 */
   corsOrigins?: string[];
+  /** 指定時は POST 実行前に IP / userId / capability 単位でレート制限する。 */
+  rateLimitGuard?: RateLimitGuard;
 }
 
 /**
@@ -32,6 +41,22 @@ export type HttpAdapter = {
   readonly handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   /** Express / Connect 互換のミドルウェア。マッチしない場合は `next()` を呼ぶ。 */
   readonly express: (req: IncomingMessage, res: ServerResponse, next: () => void) => void;
+};
+
+const idempotencyKeyFromRequest = (req: IncomingMessage): string | undefined => {
+  const raw = req.headers['idempotency-key'];
+  if (!raw) return undefined;
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
+const mergeIdempotencyKey = (
+  req: IncomingMessage,
+  execOptions: ExecutionOptions,
+): ExecutionOptions => {
+  const idempotencyKey = idempotencyKeyFromRequest(req);
+  return idempotencyKey ? { ...execOptions, idempotencyKey } : execOptions;
 };
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -72,6 +97,9 @@ function errorToResponse(err: unknown): { status: number; body: unknown } {
   if (err instanceof ApprovalDeniedError) {
     return { status: 409, body: { error: { code: 'APPROVAL_DENIED', message: err.message } } };
   }
+  if (err instanceof IdempotencyConflictError) {
+    return { status: 409, body: { error: { code: 'IDEMPOTENCY_CONFLICT', message: err.message } } };
+  }
   const message = err instanceof Error ? err.message : 'Internal server error';
   return { status: 500, body: { error: { code: 'INTERNAL_ERROR', message } } };
 }
@@ -102,7 +130,10 @@ export function createHttpAdapter(
     if (origin && corsOrigins.includes(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'Content-Type,Authorization,Idempotency-Key',
+      );
     }
   };
 
@@ -119,6 +150,12 @@ export function createHttpAdapter(
 
     const listPath = `${basePath}/capabilities`;
     const capPath = `${basePath}/capabilities/`;
+    const openApiPath = `${basePath}/openapi.json`;
+
+    if (method === 'GET' && url === openApiPath) {
+      sendJson(res, 200, exportOpenApiDocument(registry, { basePath }));
+      return true;
+    }
 
     if (method === 'GET' && url === listPath) {
       sendJson(res, 200, { capabilities: buildRegistryMeta(registry) });
@@ -141,7 +178,32 @@ export function createHttpAdapter(
       try {
         const rawBody = await readBody(req, maxBodyBytes);
         const input = rawBody ? JSON.parse(rawBody) : {};
-        const execOptions = await options.resolveExecutionOptions(req);
+        const execOptions = mergeIdempotencyKey(req, await options.resolveExecutionOptions(req));
+        if (options.rateLimitGuard) {
+          const limited = await Promise.resolve(
+            options.rateLimitGuard.check({
+              ip: clientIpFromRequest(req),
+              userId: execOptions.userId,
+              capabilityName: name,
+            }),
+          );
+          if (!limited.allowed) {
+            res.writeHead(429, {
+              'Content-Type': 'application/json',
+              'Retry-After': String(limited.retryAfterSeconds),
+            });
+            res.end(
+              JSON.stringify({
+                error: {
+                  code: 'RATE_LIMITED',
+                  message: 'Too many requests',
+                  retryAfterSeconds: limited.retryAfterSeconds,
+                },
+              }),
+            );
+            return true;
+          }
+        }
         const result = await engine.execute(name, input, execOptions);
         sendJson(res, 200, result);
       } catch (err) {

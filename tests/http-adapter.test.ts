@@ -8,6 +8,7 @@ import {
   createEngine,
   createAuditLog,
   createInMemoryStorage,
+  createInMemoryIdempotencyStore,
   autoApprove,
 } from '../src/index.js';
 import { createHttpAdapter } from '../src/adapters/http.js';
@@ -110,5 +111,43 @@ describe('createHttpAdapter', () => {
     const { res } = makeRes();
     const handled = await adapter.handler(req, res);
     expect(handled).toBe(false);
+  });
+
+  it('accepts Idempotency-Key header on POST', async () => {
+    let calls = 0;
+    const counting = defineCapability({
+      name: 'count',
+      description: 'count',
+      inputSchema: z.object({}),
+      outputSchema: z.object({ n: z.number() }),
+      policy: { requiredPermissions: [], sideEffects: ['write'], auditLevel: 'basic' },
+      async handler() {
+        calls += 1;
+        return { n: calls };
+      },
+    });
+    const reg = createRegistry().register(counting);
+    const store = createInMemoryStorage();
+    const eng = createEngine({
+      registry: reg,
+      auditLog: createAuditLog(store),
+      approvalGate: autoApprove,
+      idempotencyStore: createInMemoryIdempotencyStore(),
+    });
+    const idemAdapter = createHttpAdapter(reg, eng, {
+      resolveExecutionOptions: () => ({ userId: 'test', permissions: [] }),
+    });
+
+    const req1 = makeReq('POST', '/capabilities/count', '{}');
+    req1.headers['idempotency-key'] = 'idem-abc';
+    const res1 = makeRes();
+    await idemAdapter.handler(req1, res1.res);
+    expect(JSON.parse(res1.body()).output.n).toBe(1);
+
+    const req2 = makeReq('POST', '/capabilities/count', '{}');
+    req2.headers['idempotency-key'] = 'idem-abc';
+    const res2 = makeRes();
+    await idemAdapter.handler(req2, res2.res);
+    expect(JSON.parse(res2.body()).output.n).toBe(1);
   });
 });
