@@ -1,9 +1,10 @@
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import { Agent, type AgentTool, type AgentOptions } from '@earendil-works/pi-agent-core';
-import { streamSimple, getModel } from '@earendil-works/pi-ai';
+import { Agent, type AgentTool, type AgentOptions, type AgentMessage } from '@earendil-works/pi-agent-core';
+import { streamSimple, getModel, type Model, type Usage } from '@earendil-works/pi-ai';
 import type { TSchema } from 'typebox';
 import type { Registry } from '../core/registry.js';
 import type { Engine, ExecutionOptions } from '../core/execution.js';
+import type { HarnessTracer } from '../core/harness-trace.js';
 
 /** `createHikariAgent` の設定オプション。 */
 export interface HikariAgentOptions {
@@ -13,12 +14,79 @@ export interface HikariAgentOptions {
   systemPrompt?: string;
   /** Anthropic API キー。省略時は `ANTHROPIC_API_KEY` 環境変数を使用する。 */
   apiKey?: string;
+  /** harness 層の intent / plan / tool 選択ログ。 */
+  harness?: HarnessTracer;
   /** Pi Agent コアへ直接渡す追加オプション（`initialState` と `streamFn` を除く）。 */
   agentOptions?: Omit<AgentOptions, 'initialState' | 'streamFn'>;
 }
 
 /** Pi `Agent` の型エイリアス。`createHikariAgent` で生成されたインスタンスは Hikari ケイパビリティをツールとして持つ。 */
 export type HikariAgent = Agent;
+
+/** `toAgentTools` / Agent 生成時に参照する実行コンテキスト。 */
+export type PiToolExecutionContext = Omit<ExecutionOptions, 'intent'> & {
+  intent?: string;
+};
+
+/** `toAgentTools` の harness / 動的コンテキスト設定。 */
+export type PiToolBindings = {
+  /** 現在のターンで engine に渡す識別情報。 */
+  readonly getContext: () => PiToolExecutionContext;
+  /** harness 層トレーサー。 */
+  readonly harness?: HarnessTracer;
+  /** 監査 intent。未指定時は `toolCallId` を使用する。 */
+  readonly resolveIntent?: (toolCallId: string, capabilityName: string, params: unknown) => string;
+};
+
+/** Pi ツール結果 `details` に含める trace 相関用ペイロード。 */
+export type PiToolResultDetails = {
+  output?: unknown;
+  traceId: string;
+  error?: string;
+};
+
+const EMPTY_USAGE: Usage = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+/**
+ * チャット履歴を Pi `AgentMessage` 配列へ変換する。
+ * assistant 行はモデルメタデータを補完した最小構成で渡す。
+ */
+export const chatHistoryToAgentMessages = (
+  history: ReadonlyArray<{ role: 'user' | 'assistant'; content: string; timestamp: Date }>,
+  model: Model<any>,
+): AgentMessage[] =>
+  history.map((message) => {
+    if (message.role === 'user') {
+      return {
+        role: 'user',
+        content: message.content,
+        timestamp: message.timestamp.getTime(),
+      };
+    }
+    return {
+      role: 'assistant',
+      content: [{ type: 'text', text: message.content }],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: EMPTY_USAGE,
+      stopReason: 'stop',
+      timestamp: message.timestamp.getTime(),
+    };
+  });
+
+/**
+ * ユーザーメッセージから harness / 監査向け intent 文字列を切り出す。
+ */
+export const intentSnippetFromMessage = (message: string, maxLen = 200): string =>
+  message.length <= maxLen ? message : `${message.slice(0, maxLen)}…`;
 
 /**
  * Hikari ケイパビリティを Pi `AgentTool` 配列に変換する。
@@ -27,7 +95,7 @@ export type HikariAgent = Agent;
 export function toAgentTools(
   registry: Registry,
   engine: Engine,
-  executionOptions: Omit<ExecutionOptions, 'intent'>,
+  bindings: PiToolBindings,
 ): AgentTool[] {
   return registry.getAll().map((cap): AgentTool => {
     const jsonSchema = zodToJsonSchema(cap.inputSchema, { target: 'openApi3' });
@@ -40,14 +108,40 @@ export function toAgentTools(
       label: cap.name,
       parameters: parameters as unknown as TSchema,
       execute: async (toolCallId, params) => {
-        const result = await engine.execute(cap.name, params, {
-          ...executionOptions,
-          intent: toolCallId,
+        const ctx = bindings.getContext();
+        const traceId = ctx.traceId ?? toolCallId;
+        const intent =
+          bindings.resolveIntent?.(toolCallId, cap.name, params) ?? ctx.intent ?? toolCallId;
+
+        await bindings.harness?.recordToolSelected({
+          traceId,
+          userId: ctx.userId,
+          sessionId: ctx.sessionId,
+          capabilityName: cap.name,
+          toolInput: params,
+          intent,
         });
-        return {
-          content: [{ type: 'text', text: JSON.stringify(result.output) }],
-          details: result.output,
-        };
+
+        try {
+          const result = await engine.execute(cap.name, params, {
+            userId: ctx.userId,
+            sessionId: ctx.sessionId,
+            traceId,
+            intent,
+            permissions: ctx.permissions,
+          });
+          const details: PiToolResultDetails = {
+            output: result.output,
+            traceId: result.traceId,
+          };
+          return {
+            content: [{ type: 'text', text: JSON.stringify(result.output) }],
+            details,
+          };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          throw new Error(message);
+        }
       },
     };
   });
@@ -58,24 +152,29 @@ export function toAgentTools(
  *
  * @param registry - ツール定義のソース。
  * @param engine - ツール呼び出しを実行するエンジン。
- * @param executionOptions - 全ツール呼び出しに適用されるユーザー識別情報と権限（`intent` を除く）。
- * @param options - モデル・システムプロンプト・APIキーなどの追加設定。
+ * @param getContext - ツール実行時に参照する実行コンテキストを返す関数。
+ * @param options - モデル・システムプロンプト・APIキー・harness などの追加設定。
  */
 export function createHikariAgent(
   registry: Registry,
   engine: Engine,
-  executionOptions: Omit<ExecutionOptions, 'intent'>,
+  getContext: () => PiToolExecutionContext,
   options: HikariAgentOptions = {},
 ): HikariAgent {
   const {
     modelId = 'claude-sonnet-4-6',
     systemPrompt = 'You are a helpful assistant with access to registered capabilities.',
     apiKey,
+    harness,
     agentOptions = {},
   } = options;
 
   const model = getModel('anthropic', modelId as 'claude-sonnet-4-6');
-  const tools = toAgentTools(registry, engine, executionOptions);
+  const tools = toAgentTools(registry, engine, {
+    getContext,
+    harness,
+    resolveIntent: (toolCallId) => getContext().intent ?? toolCallId,
+  });
 
   return new Agent({
     ...agentOptions,
@@ -88,3 +187,26 @@ export function createHikariAgent(
     },
   });
 }
+
+/**
+ * 固定の `ExecutionOptions` で Pi Agent を生成する（CLI / サンプル向け）。
+ * ターンごとに `traceId` や `intent` を変える場合は `getContext` 版の `createHikariAgent` を使う。
+ */
+export function createHikariAgentWithOptions(
+  registry: Registry,
+  engine: Engine,
+  executionOptions: PiToolExecutionContext,
+  options: HikariAgentOptions = {},
+): HikariAgent {
+  const contextRef = { current: executionOptions };
+  return createHikariAgent(registry, engine, () => contextRef.current, options);
+}
+
+/** Pi ツール結果から engine の `traceId` を取り出す。 */
+export const traceIdFromPiToolResult = (result: unknown): string | undefined => {
+  if (!result || typeof result !== 'object') return undefined;
+  const details = (result as { details?: PiToolResultDetails }).details;
+  if (details?.traceId && typeof details.traceId === 'string') return details.traceId;
+  const direct = (result as PiToolResultDetails).traceId;
+  return typeof direct === 'string' ? direct : undefined;
+};
