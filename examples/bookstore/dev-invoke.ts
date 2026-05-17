@@ -2,15 +2,15 @@
  * 開発用 capability smoke test（API キー不要）。
  *
  * ```bash
- * npx tsx tmp/dev-invoke.ts --list
- * npx tsx tmp/dev-invoke.ts list_books
- * npx tsx tmp/dev-invoke.ts purchase_book '{"bookId":"1","quantity":1}' purchase
- * npx tsx tmp/dev-invoke.ts --entry examples/bookstore/registry.ts list_books
+ * npx tsx examples/bookstore/dev-invoke.ts --list
+ * npx tsx examples/bookstore/dev-invoke.ts list_books
+ * npx tsx examples/bookstore/dev-invoke.ts purchase_book '{"bookId":"1","quantity":1}' purchase
+ * npx tsx examples/bookstore/dev-invoke.ts --entry examples/bookstore/registry.ts list_books
  * ```
  */
-import { createCapabilityInvoker, runInvokeCli } from '../src/devtools/invoker.js';
-import { loadRegistryFrom } from '../src/cli/loader.js';
-import { registry as bookstoreRegistry } from '../examples/bookstore/registry.js';
+import { createCapabilityInvoker, runInvokeCli } from '../../src/devtools/invoker.js';
+import { loadRegistryFrom } from '../../src/cli/loader.js';
+import { registry as bookstoreRegistry } from './registry.js';
 
 const DEFAULT_ENTRY = 'examples/bookstore/registry.ts';
 

@@ -19,7 +19,7 @@ export async function loadRegistryFrom(
     throw new Error(
       `Entry file not found: '${entry}' (resolved to '${modulePath}'). ` +
         `Pass a path to a module that exports \`export const ${exportName} = createRegistry()...\`. ` +
-        `Example: npx tsx tmp/dev-invoke.ts --entry examples/bookstore/registry.ts --list`,
+        `Example: npx tsx examples/bookstore/dev-invoke.ts --entry examples/bookstore/registry.ts --list`,
     );
   }
 
