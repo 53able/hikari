@@ -1,0 +1,51 @@
+import { describe, it, expect } from 'vitest';
+import { createHmac } from 'node:crypto';
+import {
+  createHeaderExecutionOptionsResolver,
+  createHmacJwtExecutionOptionsResolver,
+  jwtExecutionPayloadSchema,
+} from '../src/web/auth.js';
+
+const signJwt = (payload: object, secret: string): string => {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = createHmac('sha256', secret).update(`${header}.${body}`).digest('base64url');
+  return `${header}.${body}.${sig}`;
+};
+
+describe('auth resolvers', () => {
+  it('resolves execution options from headers', () => {
+    const resolve = createHeaderExecutionOptionsResolver();
+    const options = resolve({
+      headers: {
+        'x-hikari-user-id': 'alice',
+        'x-hikari-permissions': 'admin,read',
+        'x-hikari-session-id': 'sess-1',
+      },
+    } as import('node:http').IncomingMessage);
+
+    expect(options).toEqual({
+      userId: 'alice',
+      permissions: ['admin', 'read'],
+      sessionId: 'sess-1',
+      traceId: undefined,
+    });
+  });
+
+  it('validates jwt payload schema', () => {
+    const parsed = jwtExecutionPayloadSchema.safeParse({ sub: 'u1', permissions: ['a'] });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('resolves execution options from HMAC JWT', () => {
+    const secret = 'test-secret';
+    const token = signJwt({ sub: 'bob', permissions: ['pay'] }, secret);
+    const resolve = createHmacJwtExecutionOptionsResolver({ secret });
+    const options = resolve({
+      headers: { authorization: `Bearer ${token}` },
+    } as import('node:http').IncomingMessage);
+
+    expect(options.userId).toBe('bob');
+    expect(options.permissions).toEqual(['pay']);
+  });
+});
