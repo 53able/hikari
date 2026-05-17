@@ -46,6 +46,7 @@ export const createCapabilityExplorer = (registry: Registry): CapabilityExplorer
   <td>${escapeHtml(meta.policy.requiredPermissions.join(', ') || '—')}</td>
   <td>${staticApproval || meta.policy.requiresApprovalWhen ? 'yes' : 'no'}</td>
   <td>${escapeHtml(meta.policy.auditLevel)}</td>
+  <td><a href="/capabilities/${escapeHtml(meta.name)}/form">form</a></td>
 </tr>`;
       })
       .join('\n');
@@ -68,7 +69,7 @@ export const createCapabilityExplorer = (registry: Registry): CapabilityExplorer
   <p>${listMeta().length} capabilities registered</p>
   <table>
     <thead>
-      <tr><th>Name</th><th>Description</th><th>Effects</th><th>Permissions</th><th>Approval</th><th>Audit</th></tr>
+      <tr><th>Name</th><th>Description</th><th>Effects</th><th>Permissions</th><th>Approval</th><th>Audit</th><th>Form</th></tr>
     </thead>
     <tbody>
 ${rows}
