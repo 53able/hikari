@@ -3,6 +3,9 @@ import type { ZodTypeAny, z } from 'zod';
 /** ケイパビリティが持つ副作用の種類。承認・監査レベルの自動判定に使われる。 */
 export type SideEffectType = 'read' | 'write' | 'financial' | 'irreversible' | 'external';
 
+/** 入力値に応じて承認要否を判定する述語。Zod パース後の入力が渡される。 */
+export type ApprovalPredicate<T = unknown> = (input: T) => boolean;
+
 /** 実行エンジンがケイパビリティを扱う方針を定義する。権限要件・副作用・承認要否・監査詳細度を含む。 */
 export interface Policy {
   /** 呼び出し元が保持すべき権限文字列のリスト。`ExecutionContext.permissions` と照合される。 */
@@ -11,7 +14,12 @@ export interface Policy {
   sideEffects: SideEffectType[];
   /** 承認要否の明示的な上書き。`sideEffects` に `financial` または `irreversible` が含まれる場合は自動で `true` になる。 */
   requiresApproval?: boolean;
-  /** 監査ログへの記録詳細度。`none`: 記録なし、`basic`: 呼び出しのみ、`full`: 入出力ペイロードを含む。 */
+  /**
+   * 入力に応じた条件付き承認（記事の `requiresApprovalWhen` に相当）。
+   * バリデーション済み入力で `true` を返した場合、human approval が必要になる。
+   */
+  requiresApprovalWhen?: ApprovalPredicate;
+  /** 監査ログへの記録詳細度。`none`: 記録なし、`basic`: イベントのみ、`full`: 入出力ペイロードを含む。 */
   auditLevel: 'none' | 'basic' | 'full';
 }
 
@@ -83,3 +91,6 @@ export function defineCapability<
 >(definition: Capability<TInput, TOutput>): Capability<TInput, TOutput> {
   return definition;
 }
+
+/** `defineCapability` のエイリアス。記事の `capability()` DSL 命名に合わせる。 */
+export const capability = defineCapability;

@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import type { ExecutionContext } from './capability.js';
+import type { Capability, ExecutionContext } from './capability.js';
 import type { AuditLogger } from './audit.js';
 import { evaluatePolicy, needsHumanApproval, describeRisk, PolicyViolationError } from './policy.js';
 import type { ApprovalGate } from './approval.js';
@@ -85,6 +85,41 @@ type EngineConfig = {
  * @param config.auditLog - 各ライフサイクルステップで監査イベントを受け取る。
  * @param config.approvalGate - `requiresApproval: true` のケイパビリティが存在する場合に必須。
  */
+type AuditPayload = {
+  input?: unknown;
+  output?: unknown;
+  error?: string;
+  metadata?: Record<string, unknown>;
+};
+
+const scrubAuditPayload = (
+  level: Capability['policy']['auditLevel'],
+  data?: AuditPayload,
+): AuditPayload | undefined => {
+  if (!data) return undefined;
+  if (level === 'full') return data;
+  if (level === 'basic') {
+    return {
+      error: data.error,
+      metadata: data.metadata,
+    };
+  }
+  return undefined;
+};
+
+const recordAudit = async (
+  auditLog: AuditLogger,
+  capability: Capability,
+  type: Parameters<AuditLogger['record']>[0],
+  capabilityName: string,
+  context: ExecutionContext,
+  data?: AuditPayload,
+): Promise<void> => {
+  if (capability.policy.auditLevel === 'none') return;
+  const scrubbed = scrubAuditPayload(capability.policy.auditLevel, data);
+  await auditLog.record(type, capabilityName, context, scrubbed);
+};
+
 export function createEngine(config: EngineConfig): Engine {
   return {
     execute: <T>(name: string, input: unknown, options: ExecutionOptions) =>
@@ -109,12 +144,12 @@ async function runCapability<T>(
     permissions: new Set(options.permissions ?? []),
   };
 
-  await auditLog.record('capability_invoked', capabilityName, context, { input });
+  await recordAudit(auditLog, capability, 'capability_invoked', capabilityName, context, { input });
 
   // Validate input
   const parseResult = capability.inputSchema.safeParse(input);
   if (!parseResult.success) {
-    await auditLog.record('execution_failed', capabilityName, context, {
+    await recordAudit(auditLog, capability, 'execution_failed', capabilityName, context, {
       input,
       error: 'Input validation failed',
     });
@@ -126,7 +161,7 @@ async function runCapability<T>(
     evaluatePolicy(capabilityName, capability.policy, context);
   } catch (err) {
     if (err instanceof PolicyViolationError) {
-      await auditLog.record('policy_denied', capabilityName, context, {
+      await recordAudit(auditLog, capability, 'policy_denied', capabilityName, context, {
         input,
         error: err.message,
       });
@@ -135,15 +170,15 @@ async function runCapability<T>(
   }
 
   // Approval gate for high-risk operations
-  if (needsHumanApproval(capability.policy)) {
+  if (needsHumanApproval(capability.policy, parseResult.data)) {
     if (!approvalGate) {
       throw new Error(
         `Capability '${capabilityName}' requires approval but no ApprovalGate is configured`,
       );
     }
     const riskLevel = describeRisk(capability.policy.sideEffects);
-    await auditLog.record('approval_requested', capabilityName, context, {
-      input,
+    await recordAudit(auditLog, capability, 'approval_requested', capabilityName, context, {
+      input: parseResult.data,
       metadata: { riskLevel },
     });
 
@@ -158,15 +193,15 @@ async function runCapability<T>(
     });
 
     if (!result.approved) {
-      await auditLog.record('approval_denied', capabilityName, context, {
-        input,
+      await recordAudit(auditLog, capability, 'approval_denied', capabilityName, context, {
+        input: parseResult.data,
         metadata: { reason: result.reason },
       });
       throw new ApprovalDeniedError(requestId, capabilityName, result.reason);
     }
 
-    await auditLog.record('approval_granted', capabilityName, context, {
-      input,
+    await recordAudit(auditLog, capability, 'approval_granted', capabilityName, context, {
+      input: parseResult.data,
       metadata: { approvedBy: result.approvedBy },
     });
   }
@@ -174,14 +209,14 @@ async function runCapability<T>(
   // Execute handler
   try {
     const output = await capability.handler(parseResult.data, context);
-    await auditLog.record('execution_succeeded', capabilityName, context, {
+    await recordAudit(auditLog, capability, 'execution_succeeded', capabilityName, context, {
       input: parseResult.data,
       output,
     });
     return { success: true, output: output as T, traceId: context.traceId };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
-    await auditLog.record('execution_failed', capabilityName, context, {
+    await recordAudit(auditLog, capability, 'execution_failed', capabilityName, context, {
       input: parseResult.data,
       error: errorMessage,
     });

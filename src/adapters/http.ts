@@ -1,27 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { Registry } from '../core/registry.js';
 import type { Engine, ExecutionOptions } from '../core/execution.js';
 import { CapabilityNotFoundError, ValidationError } from '../core/execution.js';
 import { PolicyViolationError } from '../core/policy.js';
 import { ApprovalDeniedError } from '../core/approval.js';
+import { buildCapabilityMeta, buildRegistryMeta, type CapabilityMeta } from '../core/cap-meta.js';
 
-/** `GET /capabilities` および `GET /capabilities/:name` が返すケイパビリティのシリアライズ済みメタデータ。 */
-export interface CapabilityMeta {
-  /** ケイパビリティ名。 */
-  name: string;
-  /** ケイパビリティの説明文。 */
-  description: string;
-  /** OpenAPI 3 形式の入力 JSON スキーマ。 */
-  inputSchema: Record<string, unknown>;
-  /** ポリシーのシリアライズ済み表現。 */
-  policy: {
-    requiredPermissions: string[];
-    sideEffects: string[];
-    requiresApproval: boolean;
-    auditLevel: string;
-  };
-}
+export type { CapabilityMeta };
 
 /** `createHttpAdapter` のオプション。 */
 export interface HttpAdapterOptions {
@@ -73,26 +58,6 @@ async function readBody(req: IncomingMessage, maxBytes: number): Promise<string>
   });
 }
 
-function buildCapMeta(cap: ReturnType<Registry['getAll']>[number]): CapabilityMeta {
-  const jsonSchema = zodToJsonSchema(cap.inputSchema, { target: 'openApi3' });
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { $schema, ...inputSchema } = jsonSchema as Record<string, unknown>;
-  return {
-    name: cap.name,
-    description: cap.description,
-    inputSchema: inputSchema as Record<string, unknown>,
-    policy: {
-      requiredPermissions: cap.policy.requiredPermissions,
-      sideEffects: cap.policy.sideEffects,
-      requiresApproval: cap.policy.requiresApproval ?? false,
-      auditLevel: cap.policy.auditLevel,
-    },
-  };
-}
-
-function buildMeta(registry: Registry): CapabilityMeta[] {
-  return registry.getAll().map(buildCapMeta);
-}
 
 function errorToResponse(err: unknown): { status: number; body: unknown } {
   if (err instanceof CapabilityNotFoundError) {
@@ -156,7 +121,7 @@ export function createHttpAdapter(
     const capPath = `${basePath}/capabilities/`;
 
     if (method === 'GET' && url === listPath) {
-      sendJson(res, 200, { capabilities: buildMeta(registry) });
+      sendJson(res, 200, { capabilities: buildRegistryMeta(registry) });
       return true;
     }
 
@@ -167,7 +132,7 @@ export function createHttpAdapter(
         sendJson(res, 404, { error: { code: 'NOT_FOUND', message: `Capability '${name}' not found` } });
         return true;
       }
-      sendJson(res, 200, buildCapMeta(cap));
+      sendJson(res, 200, buildCapabilityMeta(cap));
       return true;
     }
 
