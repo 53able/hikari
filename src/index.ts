@@ -14,3 +14,5 @@ export type { ChatUiOptions } from './web/chat-ui.js';
 export { createTraceViewer } from './devtools/trace-viewer.js';
 export type { TraceViewer, TraceSpan, TraceStatus, FormatOptions } from './devtools/trace-viewer.js';
 export { renderTraceHtml } from './devtools/trace-html.js';
+export { createCapabilityExplorer } from './devtools/cap-explorer.js';
+export type { CapabilityExplorer } from './devtools/cap-explorer.js';
