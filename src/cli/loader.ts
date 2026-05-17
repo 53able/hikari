@@ -1,3 +1,4 @@
+import { access } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { Registry } from '../core/registry.js';
 
@@ -11,6 +12,16 @@ export async function loadRegistryFrom(
   exportName = 'registry',
 ): Promise<LoadedModule> {
   const modulePath = resolve(process.cwd(), entry);
+
+  try {
+    await access(modulePath);
+  } catch {
+    throw new Error(
+      `Entry file not found: '${entry}' (resolved to '${modulePath}'). ` +
+        `Pass a path to a module that exports \`export const ${exportName} = createRegistry()...\`. ` +
+        `Example: npx tsx tmp/dev-invoke.ts --entry examples/bookstore/registry.ts --list`,
+    );
+  }
 
   if (modulePath.endsWith('.ts')) {
     try {
