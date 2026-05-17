@@ -8,6 +8,7 @@ import {
   createHarnessTracer,
   createHikariAgent,
   intentSnippetFromMessage,
+  buildHarnessPlan,
 } from '../../src/index.js';
 import { listBooks, getBook, purchaseBook, addBook, deleteBook } from './capabilities.js';
 
@@ -21,7 +22,7 @@ const registry = createRegistry()
 const storage = createInMemoryStorage();
 const auditLog = createAuditLog(storage);
 const engine = createEngine({ registry, auditLog, approvalGate: devAutoApprove });
-const harness = createHarnessTracer(auditLog);
+const harness = createHarnessTracer(auditLog, { registry, auditLevel: 'basic' });
 
 const baseCtx = {
   userId: 'user-alice',
@@ -40,7 +41,9 @@ const runPrompt = async (userMessage: string): Promise<void> => {
     traceId,
     userId: baseCtx.userId,
     intent,
-    plan: 'Answer using bookstore capabilities (list, get, purchase, add, delete)',
+    plan: buildHarnessPlan(registry, {
+      prefix: 'Answer using bookstore capabilities',
+    }),
   });
 
   const agent = createHikariAgent(registry, engine, () => contextRef.current, {

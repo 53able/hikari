@@ -13,6 +13,7 @@ import {
   createHarnessTracer,
   createTraceViewer,
   createCapabilityExplorer,
+  buildHarnessPlan,
   devAutoApprove,
 } from '../../src/index.js';
 import {
@@ -31,7 +32,7 @@ const registry = createRegistry()
 const storage = createInMemoryStorage();
 const auditLog = createAuditLog(storage);
 const engine = createEngine({ registry, auditLog, approvalGate: devAutoApprove });
-const harness = createHarnessTracer(auditLog);
+const harness = createHarnessTracer(auditLog, { registry, auditLevel: 'basic' });
 const traces = createTraceViewer(storage);
 const explorer = createCapabilityExplorer(registry);
 
@@ -58,7 +59,9 @@ const run = async (): Promise<void> => {
     traceId,
     userId: ctx.userId,
     intent,
-    plan: 'search overdue → get contact → compose → approve → send',
+    plan: buildHarnessPlan(registry, {
+      prefix: 'Invoice reminder: search overdue → contact → compose → approve → send',
+    }),
   });
 
   console.log('1. Search overdue invoices…');
