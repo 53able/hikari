@@ -40,6 +40,12 @@ export const autoApprove: ApprovalGate = async (_req) => ({
  * 本番環境では絶対に使用しないこと — 人間によるレビューをバイパスする。
  */
 export const devAutoApprove: ApprovalGate = async (req) => {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'devAutoApprove must not be used in production. Provide a real ApprovalGate implementation.',
+    );
+  }
+
   console.log('\n[APPROVAL REQUIRED — dev auto-approve]');
   console.log(`  Capability : ${req.capabilityName}`);
   console.log(`  Risk level : ${req.riskLevel}`);
