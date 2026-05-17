@@ -2,7 +2,16 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { randomUUID } from 'node:crypto';
 import { renderChatHtml } from './chat-ui.js';
 import type { ClaudeAdapter } from '../adapters/claude.js';
-import type { HikariAgent } from '../adapters/pi.js';
+import {
+  createHikariAgent,
+  chatHistoryToAgentMessages,
+  intentSnippetFromMessage,
+  traceIdFromPiToolResult,
+  type HikariAgentOptions,
+} from '../adapters/pi.js';
+import type { Engine } from '../core/execution.js';
+import type { HarnessTracer } from '../core/harness-trace.js';
+import type { Registry } from '../core/registry.js';
 import type { ExecutionOptions } from '../core/execution.js';
 import type { SessionManager } from '../agent/session.js';
 
@@ -110,15 +119,58 @@ export function backendFromClaude(adapter: ClaudeAdapter): ChatBackend {
   };
 }
 
+/** `backendFromPiAgent` の依存関係。リクエストごとに Agent を生成しコンテキスト漏洩を防ぐ。 */
+export interface PiChatBackendDeps {
+  registry: Registry;
+  engine: Engine;
+  harness?: HarnessTracer;
+  agentOptions?: HikariAgentOptions;
+}
+
 /**
- * Pi `HikariAgent` を `ChatBackend` としてラップする。
- * エージェントの subscribe/prompt イベントモデルを `ChatStreamEvent` の非同期イテラブルにブリッジする。
+ * Pi harness + Hikari エンジンから `ChatBackend` を生成する。
+ * 各ストリームで専用 Agent を起動し、履歴・`ExecutionOptions`・harness trace をターン単位で適用する。
  */
-export function backendFromPiAgent(agent: HikariAgent): ChatBackend {
+export function backendFromPiAgent(deps: PiChatBackendDeps): ChatBackend {
   return {
-    stream(message, _history, _options) {
+    stream(message, history, options) {
       return (async function* () {
+        const traceId = options.traceId ?? randomUUID();
+        const intent = options.intent ?? intentSnippetFromMessage(message);
+        const executionContext = {
+          userId: options.userId,
+          sessionId: options.sessionId,
+          traceId,
+          intent,
+          permissions: options.permissions,
+        };
+
+        await deps.harness?.recordIntent({
+          traceId,
+          userId: options.userId,
+          sessionId: options.sessionId,
+          intent,
+        });
+        await deps.harness?.recordPlan({
+          traceId,
+          userId: options.userId,
+          sessionId: options.sessionId,
+          intent,
+          plan: 'Interpret user message, select capabilities, execute via Hikari engine',
+        });
+
+        const contextRef = { current: executionContext };
+        const agent = createHikariAgent(
+          deps.registry,
+          deps.engine,
+          () => contextRef.current,
+          { harness: deps.harness, ...deps.agentOptions },
+        );
+
+        agent.state.messages = chatHistoryToAgentMessages(history, agent.state.model);
+
         const events: ChatStreamEvent[] = [];
+        const traceIds = new Set<string>([traceId]);
         let resolve: (() => void) | null = null;
         let done = false;
 
@@ -143,16 +195,20 @@ export function backendFromPiAgent(agent: HikariAgent): ChatBackend {
               type: 'tool_use',
               name: agentEvent.toolName ?? '',
               input: agentEvent.args,
-              traceId: randomUUID(),
+              traceId,
             });
-          } else if (agentEvent.type === 'tool_execution_end' && !agentEvent.isError) {
+          } else if (agentEvent.type === 'tool_execution_end') {
+            const toolTraceId = traceIdFromPiToolResult(agentEvent.result) ?? traceId;
+            traceIds.add(toolTraceId);
             events.push({
               type: 'tool_result',
-              traceId: randomUUID(),
-              output: agentEvent.result,
+              traceId: toolTraceId,
+              output: agentEvent.isError
+                ? { error: agentEvent.result }
+                : agentEvent.result,
             });
           } else if (agentEvent.type === 'agent_end') {
-            events.push({ type: 'done', traceIds: [] });
+            events.push({ type: 'done', traceIds: [...traceIds] });
             done = true;
           }
 
@@ -178,6 +234,7 @@ export function backendFromPiAgent(agent: HikariAgent): ChatBackend {
           }
         } finally {
           unsub();
+          agent.reset();
           await promptPromise;
         }
       })();
