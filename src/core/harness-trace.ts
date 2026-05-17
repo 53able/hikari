@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { AuditLogger } from './audit.js';
 import type { ExecutionContext } from './capability.js';
+import type { AuditLevel } from './audit-scrub.js';
+import { scrubAuditPayload } from './audit-scrub.js';
+import type { Registry } from './registry.js';
 
 /** エージェント harness が記録する高レベルイベント（意図・計画・ツール選択）。 */
 export type HarnessTraceEvent =
@@ -17,6 +20,14 @@ type HarnessRecordInput = {
   plan?: string;
   toolInput?: unknown;
   metadata?: Record<string, unknown>;
+};
+
+/** `createHarnessTracer` のオプション。 */
+export type HarnessTracerOptions = {
+  /** harness イベントのデフォルト監査レベル。ケイパビリティ名がレジストリにある場合はその `auditLevel` を優先する。 */
+  auditLevel?: AuditLevel;
+  /** `recordToolSelected` 時にケイパビリティ別 `auditLevel` を解決するレジストリ。 */
+  registry?: Registry;
 };
 
 /**
@@ -39,31 +50,51 @@ const baseContext = (input: HarnessRecordInput): ExecutionContext => ({
   permissions: new Set(),
 });
 
+const resolveHarnessAuditLevel = (
+  capabilityName: string | undefined,
+  options: HarnessTracerOptions,
+): AuditLevel => {
+  if (capabilityName && capabilityName !== '_harness' && options.registry) {
+    const cap = options.registry.get(capabilityName);
+    if (cap) return cap.policy.auditLevel;
+  }
+  return options.auditLevel ?? 'basic';
+};
+
 const recordHarness = async (
   auditLog: AuditLogger,
+  options: HarnessTracerOptions,
   type: HarnessTraceEvent,
   input: HarnessRecordInput,
 ): Promise<void> => {
-  const context = baseContext(input);
   const capabilityName = input.capabilityName ?? '_harness';
-  await auditLog.record(type, capabilityName, context, {
+  const level = resolveHarnessAuditLevel(capabilityName, options);
+  if (level === 'none') return;
+
+  const context = baseContext(input);
+  const rawPayload = {
     input: input.plan ?? input.toolInput,
     metadata: {
       ...input.metadata,
       harness: true,
       plan: input.plan,
     },
-  });
+  };
+  const scrubbed = scrubAuditPayload(level, rawPayload);
+  await auditLog.record(type, capabilityName, context, scrubbed);
 };
 
 /**
  * `AuditLogger` に harness イベントを書き込むトレーサーを生成する。
  */
-export const createHarnessTracer = (auditLog: AuditLogger): HarnessTracer => ({
-  recordIntent: (input) => recordHarness(auditLog, 'intent_recorded', input),
-  recordPlan: (input) => recordHarness(auditLog, 'plan_recorded', input),
+export const createHarnessTracer = (
+  auditLog: AuditLogger,
+  options: HarnessTracerOptions = {},
+): HarnessTracer => ({
+  recordIntent: (input) => recordHarness(auditLog, options, 'intent_recorded', input),
+  recordPlan: (input) => recordHarness(auditLog, options, 'plan_recorded', input),
   recordToolSelected: (input) =>
-    recordHarness(auditLog, 'tool_selected', {
+    recordHarness(auditLog, options, 'tool_selected', {
       ...input,
       capabilityName: input.capabilityName,
     }),
