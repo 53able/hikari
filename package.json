@@ -24,17 +24,27 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
-    "example": "tsx examples/bookstore/main.ts"
+    "example": "tsx examples/bookstore/main.ts",
+    "example:flow": "tsx examples/bookstore/main-flow.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "@earendil-works/pi-agent-core": "^0.74.0",
     "@earendil-works/pi-ai": "^0.74.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-native": "^0.0.0",
+    "react-native-web": "^0.21.2",
+    "redis": "^4.7.1",
+    "tamagui": "^2.0.0-rc.42",
     "zod": "^3.23.8",
     "zod-to-json-schema": "^3.23.5"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/react-native": "^0.72.8",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"
