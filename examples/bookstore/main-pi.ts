@@ -1,10 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import {
   createRegistry,
   createAuditLog,
   createInMemoryStorage,
   createEngine,
   devAutoApprove,
+  createHarnessTracer,
   createHikariAgent,
+  intentSnippetFromMessage,
 } from '../../src/index.js';
 import { listBooks, getBook, purchaseBook, addBook, deleteBook } from './capabilities.js';
 
@@ -18,18 +21,32 @@ const registry = createRegistry()
 const storage = createInMemoryStorage();
 const auditLog = createAuditLog(storage);
 const engine = createEngine({ registry, auditLog, approvalGate: devAutoApprove });
+const harness = createHarnessTracer(auditLog);
 
-const agent = createHikariAgent(
-  registry,
-  engine,
-  { userId: 'user-alice', permissions: ['purchase'] },
-  { systemPrompt: 'You are a helpful bookstore assistant. Use available tools to answer questions.' },
-);
+const baseCtx = {
+  userId: 'user-alice',
+  permissions: ['purchase'] as string[],
+};
 
-async function run() {
-  console.log('═══════════════════════════════════════');
-  console.log('  Hikari Bookstore — Pi Agent Example');
-  console.log('═══════════════════════════════════════\n');
+const runPrompt = async (userMessage: string): Promise<void> => {
+  const traceId = randomUUID();
+  const intent = intentSnippetFromMessage(userMessage);
+  const contextRef = {
+    current: { ...baseCtx, traceId, intent },
+  };
+
+  await harness.recordIntent({ traceId, userId: baseCtx.userId, intent });
+  await harness.recordPlan({
+    traceId,
+    userId: baseCtx.userId,
+    intent,
+    plan: 'Answer using bookstore capabilities (list, get, purchase, add, delete)',
+  });
+
+  const agent = createHikariAgent(registry, engine, () => contextRef.current, {
+    harness,
+    systemPrompt: 'You are a helpful bookstore assistant. Use available tools to answer questions.',
+  });
 
   agent.subscribe((event) => {
     if (event.type === 'tool_execution_start') {
@@ -50,13 +67,19 @@ async function run() {
     }
   });
 
-  console.log('User: What books do you have in stock?\n');
-  await agent.prompt('What books do you have in stock?');
+  console.log(`User: ${userMessage}\n`);
+  await agent.prompt(userMessage);
   await agent.waitForIdle();
+  agent.reset();
+};
 
-  console.log('\nUser: Buy 1 copy of Clean Code for me.\n');
-  await agent.prompt('Buy 1 copy of Clean Code for me.');
-  await agent.waitForIdle();
+async function run() {
+  console.log('═══════════════════════════════════════');
+  console.log('  Hikari Bookstore — Pi Agent Example');
+  console.log('═══════════════════════════════════════\n');
+
+  await runPrompt('What books do you have in stock?');
+  await runPrompt('Buy 1 copy of Clean Code for me.');
 
   console.log('\n--- Audit trail ---');
   const entries = storage.getAll();

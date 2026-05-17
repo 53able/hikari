@@ -102,16 +102,21 @@ const result = await adapter.chat(
 ### Pi harness
 
 ```typescript
-import { createHikariAgent } from 'hikari';
+import { createHikariAgentWithOptions, createHarnessTracer } from 'hikari';
 
-const agent = createHikariAgent(registry, engine, {
-  userId: 'user-1',
-  permissions: ['purchase'],
-});
+const harness = createHarnessTracer(auditLog);
+const agent = createHikariAgentWithOptions(
+  registry,
+  engine,
+  { userId: 'user-1', permissions: ['purchase'], traceId: crypto.randomUUID() },
+  { harness },
+);
 await agent.prompt('List books in stock');
 ```
 
-Pi は agent control plane（計画・ツール選択）を担い、副作用の実行は Hikari エンジンが決定論的に処理する。
+Pi は agent control plane（計画・ツール選択）を担い、副作用の実行は Hikari エンジンが決定論的に処理する。`hikari serve` は Pi チャット UI を提供する。
+
+> RPC / SDK によるリモート呼び出しは未実装。HTTP アダプターとチャット UI を利用してください。
 
 ## 記事 MVP フロー（請求リマインド）
 
