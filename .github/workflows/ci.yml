@@ -48,8 +48,6 @@ jobs:
           node-version: "22"
           cache: npm
           registry-url: https://registry.npmjs.org
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Install npm for trusted publishing
         run: npm install -g npm@11.5.1
@@ -58,23 +56,36 @@ jobs:
         env:
           NPM_SECRET: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+          set -euo pipefail
+
+          if [ -n "${NODE_AUTH_TOKEN:-}" ] && npm whoami >/dev/null 2>&1; then
             echo "NPM_TOKEN=${NODE_AUTH_TOKEN}" >> "$GITHUB_ENV"
-            npm whoami
-            exit 0
-          fi
-          if [ -n "${NPM_SECRET}" ]; then
+            echo "Auth: OIDC (Trusted Publisher via setup-node)"
+          elif [ -n "${NPM_SECRET:-}" ]; then
+            echo "//registry.npmjs.org/:_authToken=${NPM_SECRET}" >> "${HOME}/.npmrc"
             echo "NPM_TOKEN=${NPM_SECRET}" >> "$GITHUB_ENV"
             npm whoami
-            exit 0
+            echo "Auth: NPM_TOKEN secret (must be Automation type)"
+          else
+            echo "::error::npm auth missing. Either configure Trusted Publisher for workflow ci.yml on https://www.npmjs.com/package/@53able/hikari or set NPM_TOKEN to an Automation token."
+            exit 1
           fi
-          echo "::error::npm auth missing. Add NPM_TOKEN (Automation token, not classic+2FA) or configure Trusted Publisher for workflow ci.yml on https://www.npmjs.com/package/@53able/hikari"
-          exit 1
+
+          if ! OUT=$(npm publish --dry-run --tag beta 2>&1); then
+            echo "$OUT"
+            if echo "$OUT" | grep -qE 'EOTP|one-time password'; then
+              echo "::error::Publish blocked by 2FA (EOTP). Replace NPM_TOKEN with an Automation token: https://www.npmjs.com/settings/~tokens → Automation → gh secret set NPM_TOKEN --repo 53able/hikari. Or remove the secret and use Trusted Publisher only."
+              exit 1
+            fi
+            exit 1
+          fi
+          echo "$OUT"
 
       - run: npm ci
 
       - name: Publish version if git tag exists but npm does not
         run: |
+          set -euo pipefail
           VERSION=$(node -p "require('./package.json').version")
           if ! git rev-parse "v${VERSION}" >/dev/null 2>&1; then
             exit 0
