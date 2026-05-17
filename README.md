@@ -116,11 +116,62 @@ await agent.prompt('List books in stock');
 
 Pi は agent control plane（計画・ツール選択）を担い、副作用の実行は Hikari エンジンが決定論的に処理する。`hikari serve` は Pi チャット UI を提供する。
 
+`hikari serve` の永続化・通知フラグ: `--audit-file <path>`（監査 JSONL）、`--approval-file <path>`（承認キュー JSON）、`--idempotency-file <path>`（冪等 JSONL）。複数インスタンス向けに Redis バックエンド: `--idempotency-redis`、`--approval-redis`、`--rate-limit-redis`（`REDIS_URL` または `--redis-url`）。Webhook は `HIKARI_APPROVAL_WEBHOOK_URL` / `HIKARI_SLACK_WEBHOOK_URL`（失敗時も実行は継続、プロセス内キューで再試行）。
+
+`hikari serve` では同一プロセスで次も利用できる:
+
+| ルート | 内容 |
+|---|---|
+| `/` | チャット UI（Tamagui SSR シェル） |
+| `/traces` | 監査トレース HTML（harness / capability を分離表示） |
+| `/capabilities` | ケイパビリティ探索 HTML |
+| `/capabilities/:name/form` | ケイパビリティ入力フォーム HTML |
+| `/approvals` | 承認キュー HTML（`--approval-queue` または本番時） |
+| `/approvals/pending` | 承認待ち JSON |
+| `/api/capabilities` | REST 実行 API（`createHttpAdapter`） |
+| `/api/openapi.json` | OpenAPI 3.0（cap-meta から生成） |
+
+`hikari serve` の主なフラグ:
+
+| フラグ | 説明 |
+|---|---|
+| `--port` | 待ち受けポート（デフォルト 3000） |
+| `--entry` | レジストリ読み込みエントリ（デフォルト `src/index.ts`） |
+| `--approval-queue` | インメモリ承認キューを有効化（開発でも human-in-the-loop） |
+| `--audit-file <path>` | 監査ログを JSONL へ永続化 |
+| `--approval-file <path>` | 承認キューを JSON へ永続化（キュー有効化も兼ねる） |
+| `--approval-log-file <path>` | 承認イベントを JSONL へ追記（状態ファイルとは別） |
+| `--idempotency-file <path>` | 冪等キー結果を JSONL へ永続化 |
+| `--redis-url <url>` | Redis 接続 URL（デフォルト `REDIS_URL` または `redis://127.0.0.1:6379`） |
+| `--idempotency-redis` | 冪等ストアを Redis に（分散 `hikari serve`） |
+| `--approval-redis` | 承認キューを Redis に（ファイル監視不要） |
+| `--rate-limit-redis` | レート制限を Redis スライディングウィンドウに |
+
+環境変数（承認・認証・レート制限）:
+
+| 変数 | 説明 |
+|---|---|
+| `HIKARI_APPROVAL_WEBHOOK_URL` | pending 時に JSON (`approval.pending`) を POST |
+| `HIKARI_SLACK_WEBHOOK_URL` | Slack Incoming Webhook（blocks 付き） |
+| `HIKARI_JWT_SECRET` | `Authorization: Bearer` の HMAC JWT 検証 |
+| `HIKARI_RATE_LIMIT_*` | IP / user / capability 単位のレート制限（`createDefaultRateLimitGuard`） |
+| `REDIS_URL` | Redis 接続（`--*-redis` フラグ利用時） |
+| `HIKARI_RATE_LIMIT_REDIS` | `1` で `hikari serve` のレート制限を Redis に（`--rate-limit-redis` と同等） |
+
+同一 Redis で 2 つの `hikari serve` を並べる例:
+
+```bash
+REDIS_URL=redis://127.0.0.1:6379 npx hikari serve --port 3000 --approval-redis --idempotency-redis --rate-limit-redis &
+REDIS_URL=redis://127.0.0.1:6379 npx hikari serve --port 3001 --approval-redis --idempotency-redis --rate-limit-redis &
+```
+
 > RPC / SDK によるリモート呼び出しは未実装。HTTP アダプターとチャット UI を利用してください。
 
 ## 記事 MVP フロー（請求リマインド）
 
 ```bash
+npm run example:flow
+# または
 npx tsx examples/bookstore/main-flow.ts
 ```
 
@@ -133,6 +184,17 @@ npx tsx examples/bookstore/main-flow.ts
 3. **トレース可能性** — traceId + harness（intent/plan/tool）+ 監査ログ
 4. **ヒューマンインザループ** — 重要操作は人間の承認を挟む
 5. **UIもケイパビリティから生成** — 単一定義源から HTTP・ツール・devtools を派生
+
+## TSX と JSX ランタイム
+
+サーバー描画ページは **TSX** で書く。ランタイムは用途で二系統ある。
+
+| 用途 | ランタイム | 例 |
+|---|---|---|
+| 静的 HTML（フォーム・素の DOM） | `src/jsx` の `h` / `Fragment` / `HtmlNode`（ファイル先頭に `@jsx h` pragma） | `/capabilities/:name/form` |
+| Tamagui シェル + テーブル等 | React（`tsconfig` 既定の `jsxFactory: React.createElement`）+ `renderToStaticMarkup` | `/`, `/traces`, `/approvals` |
+
+新規の静的ページは `cap-form-page.tsx` と同様に、先頭に `/** @jsx h */` / `/** @jsxFrag Fragment */` と `import { h, Fragment } from '../jsx/index.js'` を付けて TSX を書く。Tamagui ページは `import React from 'react'` のうえで通常の TSX でよい。
 
 ## 開発
 
@@ -162,8 +224,16 @@ src/
 │   ├── claude.ts
 │   ├── pi.ts
 │   └── http.ts
+├── jsx/
+│   ├── index.ts           # h / Fragment / HtmlNode
+│   └── jsx-runtime.ts     # react-jsx 自動ランタイム
+├── web/
+│   ├── chat-page.tsx      # Tamagui（React pragma）
+│   ├── cap-form-page.tsx  # 静的フォーム（h ランタイム）
+│   └── approval-page.tsx
 ├── devtools/
 │   ├── trace-viewer.ts
+│   ├── trace-page.tsx
 │   └── cap-explorer.ts
 └── agent/
     └── session.ts
