@@ -13,6 +13,9 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  NODE_VERSION: "22"
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -21,7 +24,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - run: npm ci
@@ -31,13 +34,12 @@ jobs:
 
   release:
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
       contents: write
       issues: write
       pull-requests: write
-      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,78 +47,16 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
           registry-url: https://registry.npmjs.org
-
-      - name: Install npm for trusted publishing
-        run: npm install -g npm@11.5.1
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - run: npm ci
-
-      - name: Configure npm auth for semantic-release
-        env:
-          NPM_SECRET: ${{ secrets.NPM_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          NPMRC="${NPM_CONFIG_USERCONFIG:-${HOME}/.npmrc}"
-
-          write_npmrc_token() {
-            printf '%s\n' "//registry.npmjs.org/:_authToken=$1" > "${NPMRC}"
-          }
-
-          AUTH_TOKEN=""
-          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
-            write_npmrc_token "${NODE_AUTH_TOKEN}"
-            if npm whoami >/dev/null 2>&1; then
-              AUTH_TOKEN="${NODE_AUTH_TOKEN}"
-              echo "Auth: OIDC (Trusted Publisher via setup-node)"
-            fi
-          fi
-
-          if [ -z "${AUTH_TOKEN}" ] && [ -n "${NPM_SECRET:-}" ]; then
-            write_npmrc_token "${NPM_SECRET}"
-            if ! npm whoami; then
-              echo "::error::NPM_TOKEN rejected (401). Use an Automation token for the npm user that owns @53able/hikari. Re-set without a trailing newline: printf '%s' 'TOKEN' | gh secret set NPM_TOKEN --repo 53able/hikari"
-              exit 1
-            fi
-            AUTH_TOKEN="${NPM_SECRET}"
-            echo "Auth: NPM_TOKEN secret"
-          fi
-
-          if [ -z "${AUTH_TOKEN}" ]; then
-            echo "::error::npm auth missing. Configure Trusted Publisher for ci.yml on https://www.npmjs.com/package/@53able/hikari or set NPM_TOKEN to an Automation token."
-            exit 1
-          fi
-
-          echo "NPM_TOKEN=${AUTH_TOKEN}" >> "$GITHUB_ENV"
-
-          if ! OUT=$(npm publish --dry-run --ignore-scripts --tag beta 2>&1); then
-            echo "$OUT"
-            if echo "$OUT" | grep -qE 'EOTP|one-time password'; then
-              echo "::error::NPM_TOKEN cannot publish (2FA/EOTP). npm whoami alone is not enough. Create token type Automation (not Publish/Granular/Classic): https://www.npmjs.com/settings/~tokens → Generate New Token → Automation → printf '%s' 'TOKEN' | gh secret set NPM_TOKEN --repo 53able/hikari"
-              exit 1
-            fi
-            exit 1
-          fi
-          echo "$OUT"
-
-      - name: Publish version if git tag exists but npm does not
-        run: |
-          set -euo pipefail
-          VERSION=$(node -p "require('./package.json').version")
-          if ! git rev-parse "v${VERSION}" >/dev/null 2>&1; then
-            exit 0
-          fi
-          if npm view "@53able/hikari@${VERSION}" version >/dev/null 2>&1; then
-            echo "@53able/hikari@${VERSION} already on npm"
-            exit 0
-          fi
-          npm run build
-          npm publish --tag beta
 
       - name: Release to npm
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npx semantic-release
