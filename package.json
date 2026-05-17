@@ -1,7 +1,32 @@
 {
-  "name": "hikari",
-  "version": "0.1.0",
+  "name": "@53able/hikari",
+  "version": "0.1.0-beta.0",
   "description": "AI-native application layer — design web apps as capabilities that LLMs can safely call",
+  "license": "MIT",
+  "author": "Go Tadano <53able>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/53able/hikari.git"
+  },
+  "bugs": {
+    "url": "https://github.com/53able/hikari/issues"
+  },
+  "homepage": "https://github.com/53able/hikari#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "ai",
+    "llm",
+    "capability",
+    "agent",
+    "harness",
+    "approval",
+    "audit"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -21,11 +46,13 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit",
     "example": "tsx examples/bookstore/main.ts",
-    "example:flow": "tsx examples/bookstore/main-flow.ts"
+    "example:flow": "tsx examples/bookstore/main-flow.ts",
+    "publish:beta": "npm publish --tag beta"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
