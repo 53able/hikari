@@ -52,6 +52,8 @@ jobs:
       - name: Install npm for trusted publishing
         run: npm install -g npm@11.5.1
 
+      - run: npm ci
+
       - name: Configure npm auth for semantic-release
         env:
           NPM_SECRET: ${{ secrets.NPM_TOKEN }}
@@ -89,18 +91,6 @@ jobs:
           fi
 
           echo "NPM_TOKEN=${AUTH_TOKEN}" >> "$GITHUB_ENV"
-
-          if ! OUT=$(npm publish --dry-run --tag beta 2>&1); then
-            echo "$OUT"
-            if echo "$OUT" | grep -qE 'EOTP|one-time password'; then
-              echo "::error::Publish blocked by 2FA (EOTP). Replace NPM_TOKEN with an Automation token: https://www.npmjs.com/settings/~tokens → Automation → gh secret set NPM_TOKEN --repo 53able/hikari. Or remove the secret and use Trusted Publisher only."
-              exit 1
-            fi
-            exit 1
-          fi
-          echo "$OUT"
-
-      - run: npm ci
 
       - name: Publish version if git tag exists but npm does not
         run: |
