@@ -1,8 +1,22 @@
 export * from './core/index.js';
 export { createClaudeAdapter } from './adapters/claude.js';
 export type { ClaudeAdapter, ChatOptions, ChatResult } from './adapters/claude.js';
-export { createHikariAgent, toAgentTools } from './adapters/pi.js';
-export type { HikariAgent, HikariAgentOptions } from './adapters/pi.js';
+export {
+  createHikariAgent,
+  createHikariAgentWithOptions,
+  toAgentTools,
+  chatHistoryToAgentMessages,
+  intentSnippetFromMessage,
+  traceIdFromPiToolResult,
+} from './adapters/pi.js';
+export type {
+  HikariAgent,
+  HikariAgentOptions,
+  PiToolBindings,
+  PiToolExecutionContext,
+  PiToolResultDetails,
+} from './adapters/pi.js';
+export type { PiChatBackendDeps } from './web/chat-server.js';
 export { createHttpAdapter } from './adapters/http.js';
 export type { HttpAdapter, HttpAdapterOptions, CapabilityMeta } from './adapters/http.js';
 export { createSessionManager } from './agent/session.js';
