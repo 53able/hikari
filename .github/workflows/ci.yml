@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -30,7 +31,7 @@ jobs:
 
   release:
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -46,11 +47,44 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+          registry-url: https://registry.npmjs.org
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Use npm with trusted publishing (OIDC)
+      - name: Install npm for trusted publishing
         run: npm install -g npm@11.5.1
 
+      - name: Configure npm auth for semantic-release
+        env:
+          NPM_SECRET: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN=${NODE_AUTH_TOKEN}" >> "$GITHUB_ENV"
+            npm whoami
+            exit 0
+          fi
+          if [ -n "${NPM_SECRET}" ]; then
+            echo "NPM_TOKEN=${NPM_SECRET}" >> "$GITHUB_ENV"
+            npm whoami
+            exit 0
+          fi
+          echo "::error::npm auth missing. Add NPM_TOKEN (Automation token, not classic+2FA) or configure Trusted Publisher for workflow ci.yml on https://www.npmjs.com/package/@53able/hikari"
+          exit 1
+
       - run: npm ci
+
+      - name: Publish version if git tag exists but npm does not
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if ! git rev-parse "v${VERSION}" >/dev/null 2>&1; then
+            exit 0
+          fi
+          if npm view "@53able/hikari@${VERSION}" version >/dev/null 2>&1; then
+            echo "@53able/hikari@${VERSION} already on npm"
+            exit 0
+          fi
+          npm run build
+          npm publish --tag beta
 
       - name: Release to npm
         env:
