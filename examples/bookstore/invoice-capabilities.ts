@@ -74,7 +74,11 @@ export const getCustomerContact = defineCapability({
   async handler({ customerId }) {
     const customer = customers.get(customerId);
     if (!customer) throw new Error(`Customer '${customerId}' not found`);
-    return customer;
+    return {
+      customerId: customer.id,
+      name: customer.name,
+      email: customer.email,
+    };
   },
 });
 
