@@ -1,24 +1,31 @@
 import { randomUUID } from 'crypto';
-import type { ExecutionContext } from './capability.js';
+import { z } from 'zod';
+import type { Capability, ExecutionContext } from './capability.js';
 import type { AuditLogger } from './audit.js';
 import { evaluatePolicy, needsHumanApproval, describeRisk, PolicyViolationError } from './policy.js';
 import type { ApprovalGate } from './approval.js';
 import { ApprovalDeniedError } from './approval.js';
 import type { Registry } from './registry.js';
+import { scrubAuditPayload } from './audit-scrub.js';
+import type { IdempotencyStore } from './idempotency-store.js';
+import {
+  buildIdempotencyStoreKey,
+  hashCapabilityInput,
+} from './idempotency-store.js';
+
+/** エンジン呼び出し時に呼び出し元が渡すオプションの Zod スキーマ。 */
+export const executionOptionsSchema = z.object({
+  userId: z.string().min(1),
+  sessionId: z.string().optional(),
+  traceId: z.string().optional(),
+  intent: z.string().optional(),
+  permissions: z.array(z.string()).optional(),
+  /** 同一キー・同一入力の再実行時にキャッシュ結果を返す（TTL 内）。 */
+  idempotencyKey: z.string().min(1).max(256).optional(),
+});
 
 /** エンジン呼び出し時に呼び出し元が渡すオプション。 */
-export interface ExecutionOptions {
-  /** 認証済みユーザーの識別子。 */
-  userId: string;
-  /** この呼び出しのセッションID。省略時はエンジンが UUID を生成する。 */
-  sessionId?: string;
-  /** トレース相関ID。省略時はエンジンが UUID を生成する。 */
-  traceId?: string;
-  /** 呼び出し意図を示す人間可読の説明。監査ログに保存される。 */
-  intent?: string;
-  /** 呼び出し元に付与された権限リスト。`Policy.requiredPermissions` と照合される。 */
-  permissions?: string[];
-}
+export type ExecutionOptions = z.infer<typeof executionOptionsSchema>;
 
 /** `Engine.execute` が成功時に返す結果オブジェクト。 */
 export interface ExecutionResult<T = unknown> {
@@ -34,6 +41,19 @@ export class CapabilityNotFoundError extends Error {
   constructor(name: string) {
     super(`Capability '${name}' not found in registry`);
     this.name = 'CapabilityNotFoundError';
+  }
+}
+
+/**
+ * 同一 `idempotencyKey` が別ケイパビリティまたは別入力で再利用されたときにスローされる。
+ * HTTP アダプターは HTTP 409 にマップする。
+ */
+export class IdempotencyConflictError extends Error {
+  constructor(idempotencyKey: string) {
+    super(
+      `Idempotency key '${idempotencyKey}' was already used with a different capability or input`,
+    );
+    this.name = 'IdempotencyConflictError';
   }
 }
 
@@ -76,6 +96,7 @@ type EngineConfig = {
   registry: Registry;
   auditLog: AuditLogger;
   approvalGate?: ApprovalGate;
+  idempotencyStore?: IdempotencyStore;
 };
 
 /**
@@ -85,6 +106,26 @@ type EngineConfig = {
  * @param config.auditLog - 各ライフサイクルステップで監査イベントを受け取る。
  * @param config.approvalGate - `requiresApproval: true` のケイパビリティが存在する場合に必須。
  */
+type AuditPayload = {
+  input?: unknown;
+  output?: unknown;
+  error?: string;
+  metadata?: Record<string, unknown>;
+};
+
+const recordAudit = async (
+  auditLog: AuditLogger,
+  capability: Capability,
+  type: Parameters<AuditLogger['record']>[0],
+  capabilityName: string,
+  context: ExecutionContext,
+  data?: AuditPayload,
+): Promise<void> => {
+  if (capability.policy.auditLevel === 'none') return;
+  const scrubbed = scrubAuditPayload(capability.policy.auditLevel, data);
+  await auditLog.record(type, capabilityName, context, scrubbed);
+};
+
 export function createEngine(config: EngineConfig): Engine {
   return {
     execute: <T>(name: string, input: unknown, options: ExecutionOptions) =>
@@ -96,10 +137,22 @@ async function runCapability<T>(
   capabilityName: string,
   input: unknown,
   options: ExecutionOptions,
-  { registry, auditLog, approvalGate }: EngineConfig,
+  { registry, auditLog, approvalGate, idempotencyStore }: EngineConfig,
 ): Promise<ExecutionResult<T>> {
   const capability = registry.get(capabilityName);
   if (!capability) throw new CapabilityNotFoundError(capabilityName);
+
+  const inputHash = hashCapabilityInput(input);
+  if (options.idempotencyKey && idempotencyStore) {
+    const storeKey = buildIdempotencyStoreKey(options.idempotencyKey);
+    const cached = await idempotencyStore.get(storeKey);
+    if (cached) {
+      if (cached.capabilityName !== capabilityName || cached.inputHash !== inputHash) {
+        throw new IdempotencyConflictError(options.idempotencyKey);
+      }
+      return cached.result as ExecutionResult<T>;
+    }
+  }
 
   const context: ExecutionContext = {
     userId: options.userId,
@@ -109,12 +162,12 @@ async function runCapability<T>(
     permissions: new Set(options.permissions ?? []),
   };
 
-  await auditLog.record('capability_invoked', capabilityName, context, { input });
+  await recordAudit(auditLog, capability, 'capability_invoked', capabilityName, context, { input });
 
   // Validate input
   const parseResult = capability.inputSchema.safeParse(input);
   if (!parseResult.success) {
-    await auditLog.record('execution_failed', capabilityName, context, {
+    await recordAudit(auditLog, capability, 'execution_failed', capabilityName, context, {
       input,
       error: 'Input validation failed',
     });
@@ -126,7 +179,7 @@ async function runCapability<T>(
     evaluatePolicy(capabilityName, capability.policy, context);
   } catch (err) {
     if (err instanceof PolicyViolationError) {
-      await auditLog.record('policy_denied', capabilityName, context, {
+      await recordAudit(auditLog, capability, 'policy_denied', capabilityName, context, {
         input,
         error: err.message,
       });
@@ -135,15 +188,15 @@ async function runCapability<T>(
   }
 
   // Approval gate for high-risk operations
-  if (needsHumanApproval(capability.policy)) {
+  if (needsHumanApproval(capability.policy, parseResult.data)) {
     if (!approvalGate) {
       throw new Error(
         `Capability '${capabilityName}' requires approval but no ApprovalGate is configured`,
       );
     }
     const riskLevel = describeRisk(capability.policy.sideEffects);
-    await auditLog.record('approval_requested', capabilityName, context, {
-      input,
+    await recordAudit(auditLog, capability, 'approval_requested', capabilityName, context, {
+      input: parseResult.data,
       metadata: { riskLevel },
     });
 
@@ -158,15 +211,15 @@ async function runCapability<T>(
     });
 
     if (!result.approved) {
-      await auditLog.record('approval_denied', capabilityName, context, {
-        input,
+      await recordAudit(auditLog, capability, 'approval_denied', capabilityName, context, {
+        input: parseResult.data,
         metadata: { reason: result.reason },
       });
       throw new ApprovalDeniedError(requestId, capabilityName, result.reason);
     }
 
-    await auditLog.record('approval_granted', capabilityName, context, {
-      input,
+    await recordAudit(auditLog, capability, 'approval_granted', capabilityName, context, {
+      input: parseResult.data,
       metadata: { approvedBy: result.approvedBy },
     });
   }
@@ -174,14 +227,28 @@ async function runCapability<T>(
   // Execute handler
   try {
     const output = await capability.handler(parseResult.data, context);
-    await auditLog.record('execution_succeeded', capabilityName, context, {
+    await recordAudit(auditLog, capability, 'execution_succeeded', capabilityName, context, {
       input: parseResult.data,
       output,
     });
-    return { success: true, output: output as T, traceId: context.traceId };
+    const result: ExecutionResult<T> = {
+      success: true,
+      output: output as T,
+      traceId: context.traceId,
+    };
+    if (options.idempotencyKey && idempotencyStore) {
+      const storeKey = buildIdempotencyStoreKey(options.idempotencyKey);
+      await idempotencyStore.set(storeKey, {
+        capabilityName,
+        inputHash,
+        result,
+        createdAt: Date.now(),
+      });
+    }
+    return result;
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
-    await auditLog.record('execution_failed', capabilityName, context, {
+    await recordAudit(auditLog, capability, 'execution_failed', capabilityName, context, {
       input: parseResult.data,
       error: errorMessage,
     });

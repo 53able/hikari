@@ -147,6 +147,46 @@ describe('createEngine / execute', () => {
     ).rejects.toThrow('no ApprovalGate is configured');
   });
 
+  it('skips audit when auditLevel is none', async () => {
+    const silent = defineCapability({
+      name: 'silent',
+      description: 'No audit',
+      inputSchema: z.object({}),
+      outputSchema: z.object({ ok: z.boolean() }),
+      policy: { requiredPermissions: [], sideEffects: ['read'], auditLevel: 'none' },
+      async handler() { return { ok: true }; },
+    });
+    const { registry, storage, engine } = makeEngine();
+    registry.register(silent);
+    await engine.execute('silent', {}, { userId: 'u1' });
+    expect(storage.getAll()).toHaveLength(0);
+  });
+
+  it('requires approval only when requiresApprovalWhen matches', async () => {
+    const gate = vi.fn(autoApprove);
+    const conditional = defineCapability({
+      name: 'charge',
+      description: 'Charge with threshold',
+      inputSchema: z.object({ amount: z.number() }),
+      outputSchema: z.object({ charged: z.boolean() }),
+      policy: {
+        requiredPermissions: [],
+        sideEffects: ['write'],
+        requiresApprovalWhen: (input: { amount: number }) => input.amount > 1000,
+        auditLevel: 'basic',
+      },
+      async handler() { return { charged: true }; },
+    });
+    const { registry, engine } = makeEngine(gate);
+    registry.register(conditional);
+
+    await engine.execute('charge', { amount: 100 }, { userId: 'u1' });
+    expect(gate).not.toHaveBeenCalled();
+
+    await engine.execute('charge', { amount: 5000 }, { userId: 'u1' });
+    expect(gate).toHaveBeenCalledOnce();
+  });
+
   it('propagates traceId into audit entries', async () => {
     const { registry, storage, engine } = makeEngine();
     registry.register(echoCapability);

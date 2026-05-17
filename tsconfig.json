@@ -12,8 +12,8 @@
     "declarationMap": true,
     "sourceMap": true,
     "jsx": "react",
-    "jsxFactory": "h",
-    "jsxFragmentFactory": "Fragment"
+    "jsxFactory": "React.createElement",
+    "jsxFragmentFactory": "React.Fragment"
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "examples", "tests"]

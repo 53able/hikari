@@ -1,5 +1,10 @@
 /**
- * JSX ランタイム。`h()` と `Fragment` を提供するサーバーサイド HTML 生成ユーティリティ。
+ * Hikari のサーバーサイド HTML 用 JSX ランタイム（`h` / `Fragment` / `jsx-runtime`）。
+ *
+ * - **標準**: `.tsx` は TSX + 本モジュール（`HtmlNode` を返す）。フォームや静的ページ向け。
+ * - **Tamagui 併用時**: `tsconfig` 既定の `React.createElement` で TSX を書き、
+ *   `renderToStaticMarkup` で SSR する（チャット / trace / 承認 UI）。
+ * - **静的 TSX**: ファイル先頭に `@jsx h` / `@jsxFrag Fragment` pragma と `h` の import を付ける。
  *
  * `h()` は生成済みの HTML を `HtmlNode` でラップして返す。
  * `renderChild` は `HtmlNode` を素通り（再エスケープなし）し、生文字列のみ HTML エスケープする。
@@ -64,7 +69,7 @@ export function h(
     return type({ ...p, children: childrenVal });
   }
 
-  const { dangerouslySetInnerHTML, children: _c, ...attrs } = p;
+  const { dangerouslySetInnerHTML, children: propsChildren, ...attrs } = p;
 
   const attrStr = Object.entries(attrs)
     .filter(([, v]) => v !== null && v !== undefined && v !== false)
@@ -80,7 +85,15 @@ export function h(
   }
 
   const dsi = dangerouslySetInnerHTML as { __html: string } | undefined;
-  const content = dsi ? dsi.__html : children.map(renderChild).join('');
+  const normalizedChildren =
+    children.length > 0
+      ? children
+      : propsChildren !== undefined
+        ? Array.isArray(propsChildren)
+          ? propsChildren
+          : [propsChildren]
+        : [];
+  const content = dsi ? dsi.__html : normalizedChildren.map(renderChild).join('');
 
   return new HtmlNode(`<${type}${attrStr}>${content}</${type}>`);
 }

@@ -82,6 +82,23 @@ function buildSpan(traceId: string, entries: AuditEntry[]): TraceSpan {
   };
 }
 
+/** harness 層（`_harness` / `metadata.harness`）の監査エントリかどうか。 */
+export const isHarnessAuditEntry = (entry: AuditEntry): boolean =>
+  entry.capabilityName === '_harness' || entry.metadata?.harness === true;
+
+/** トレース内イベントを harness とケイパビリティ実行に分割する。 */
+export const partitionTraceEvents = (
+  events: readonly AuditEntry[],
+): { harness: AuditEntry[]; capability: AuditEntry[] } => {
+  const harness: AuditEntry[] = [];
+  const capability: AuditEntry[] = [];
+  for (const entry of events) {
+    if (isHarnessAuditEntry(entry)) harness.push(entry);
+    else capability.push(entry);
+  }
+  return { harness, capability };
+};
+
 function groupByTrace(entries: AuditEntry[]): Map<string, AuditEntry[]> {
   const map = new Map<string, AuditEntry[]>();
   for (const entry of entries) {

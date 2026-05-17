@@ -2,9 +2,30 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { randomUUID } from 'node:crypto';
 import { renderChatHtml } from './chat-ui.js';
 import type { ClaudeAdapter } from '../adapters/claude.js';
-import type { HikariAgent } from '../adapters/pi.js';
+import {
+  createHikariAgent,
+  chatHistoryToAgentMessages,
+  intentSnippetFromMessage,
+  traceIdFromPiToolResult,
+  type HikariAgentOptions,
+} from '../adapters/pi.js';
+import type { Engine } from '../core/execution.js';
+import type { HarnessTracer } from '../core/harness-trace.js';
+import type { Registry } from '../core/registry.js';
 import type { ExecutionOptions } from '../core/execution.js';
 import type { SessionManager } from '../agent/session.js';
+import type { ApprovalApi } from '../core/approval-store.js';
+import type { ApprovalRequest } from '../core/approval.js';
+import type { AuditStorage } from '../core/audit.js';
+import { buildHarnessPlan } from '../core/harness-plan.js';
+import { createHttpAdapter, type HttpAdapter } from '../adapters/http.js';
+import { createTraceViewer } from '../devtools/trace-viewer.js';
+import { createCapabilityExplorer } from '../devtools/cap-explorer.js';
+import { renderApprovalPageHtml } from './approval-page.js';
+import { buildCapabilityMeta } from '../core/cap-meta.js';
+import { renderCapabilityFormHtml } from './cap-form-page.js';
+import type { RateLimitGuard } from '../core/rate-limit.js';
+import { clientIpFromRequest } from '../core/rate-limit.js';
 
 /**
  * チャットターン中に `ChatBackend.stream` から emit される SSE イベント。
@@ -14,6 +35,14 @@ export type ChatStreamEvent =
   | { type: 'text_delta'; delta: string }
   | { type: 'tool_use'; name: string; input: unknown; traceId: string }
   | { type: 'tool_result'; traceId: string; output: unknown }
+  | {
+      type: 'approval_required';
+      requestId: string;
+      capabilityName: string;
+      riskLevel: string;
+      input: unknown;
+      traceId: string;
+    }
   | { type: 'done'; traceIds: string[] }
   | { type: 'error'; message: string };
 
@@ -59,8 +88,23 @@ export interface ChatServerOptions {
   serveStaticUi?: boolean;
   /** CORS オリジンの許可リスト。 */
   corsOrigins?: string[];
+  /** `POST /chat` および REST API で共有するレート制限ガード。 */
+  rateLimitGuard?: RateLimitGuard;
   /** セッション管理に使用する `SessionManager`。省略時はセッション履歴が保持されない。 */
   sessions?: SessionManager;
+  /** 承認 API。指定時は `/approvals/*` ルートとチャット内 `/approve` `/reject` コマンドが有効になる。 */
+  approvals?: ApprovalApi;
+  /** 監査トレース一覧・ケイパビリティ探索 HTML（`/traces`, `/capabilities`）。 */
+  devtools?: {
+    storage: AuditStorage;
+    registry: Registry;
+  };
+  /** REST ケイパビリティ API（デフォルトプレフィックス `/api`）。 */
+  httpApi?: {
+    registry: Registry;
+    engine: Engine;
+    basePath?: string;
+  };
 }
 
 /** `createChatServer` が返すサーバーオブジェクト。 */
@@ -110,17 +154,82 @@ export function backendFromClaude(adapter: ClaudeAdapter): ChatBackend {
   };
 }
 
+/** `backendFromPiAgent` の依存関係。リクエストごとに Agent を生成しコンテキスト漏洩を防ぐ。 */
+export interface PiChatBackendDeps {
+  registry: Registry;
+  engine: Engine;
+  harness?: HarnessTracer;
+  agentOptions?: HikariAgentOptions;
+  /**
+   * ストリーム単位で承認待ち通知を登録する。
+   * @returns ストリーム終了時に呼ぶ解除関数。
+   */
+  onRegisterApprovalNotifier?: (
+    traceId: string,
+    notify: (req: ApprovalRequest) => void,
+  ) => (() => void) | void;
+}
+
 /**
- * Pi `HikariAgent` を `ChatBackend` としてラップする。
- * エージェントの subscribe/prompt イベントモデルを `ChatStreamEvent` の非同期イテラブルにブリッジする。
+ * Pi harness + Hikari エンジンから `ChatBackend` を生成する。
+ * 各ストリームで専用 Agent を起動し、履歴・`ExecutionOptions`・harness trace をターン単位で適用する。
  */
-export function backendFromPiAgent(agent: HikariAgent): ChatBackend {
+export function backendFromPiAgent(deps: PiChatBackendDeps): ChatBackend {
   return {
-    stream(message, _history, _options) {
+    stream(message, history, options) {
       return (async function* () {
+        const traceId = options.traceId ?? randomUUID();
+        const intent = options.intent ?? intentSnippetFromMessage(message);
+        let unregisterApproval: (() => void) | undefined;
+        const executionContext = {
+          userId: options.userId,
+          sessionId: options.sessionId,
+          traceId,
+          intent,
+          permissions: options.permissions,
+        };
+
+        await deps.harness?.recordIntent({
+          traceId,
+          userId: options.userId,
+          sessionId: options.sessionId,
+          intent,
+        });
+        await deps.harness?.recordPlan({
+          traceId,
+          userId: options.userId,
+          sessionId: options.sessionId,
+          intent,
+          plan: buildHarnessPlan(deps.registry),
+        });
+
+        const contextRef = { current: executionContext };
+        const agent = createHikariAgent(
+          deps.registry,
+          deps.engine,
+          () => contextRef.current,
+          { harness: deps.harness, ...deps.agentOptions },
+        );
+
+        agent.state.messages = chatHistoryToAgentMessages(history, agent.state.model);
+
         const events: ChatStreamEvent[] = [];
+        const traceIds = new Set<string>([traceId]);
         let resolve: (() => void) | null = null;
         let done = false;
+
+        unregisterApproval = deps.onRegisterApprovalNotifier?.(traceId, (req) => {
+          events.push({
+            type: 'approval_required',
+            requestId: req.id,
+            capabilityName: req.capabilityName,
+            riskLevel: req.riskLevel,
+            input: req.input,
+            traceId: req.context.traceId,
+          });
+          resolve?.();
+          resolve = null;
+        }) ?? undefined;
 
         const unsub = agent.subscribe((event) => {
           const agentEvent = event as {
@@ -143,16 +252,20 @@ export function backendFromPiAgent(agent: HikariAgent): ChatBackend {
               type: 'tool_use',
               name: agentEvent.toolName ?? '',
               input: agentEvent.args,
-              traceId: randomUUID(),
+              traceId,
             });
-          } else if (agentEvent.type === 'tool_execution_end' && !agentEvent.isError) {
+          } else if (agentEvent.type === 'tool_execution_end') {
+            const toolTraceId = traceIdFromPiToolResult(agentEvent.result) ?? traceId;
+            traceIds.add(toolTraceId);
             events.push({
               type: 'tool_result',
-              traceId: randomUUID(),
-              output: agentEvent.result,
+              traceId: toolTraceId,
+              output: agentEvent.isError
+                ? { error: agentEvent.result }
+                : agentEvent.result,
             });
           } else if (agentEvent.type === 'agent_end') {
-            events.push({ type: 'done', traceIds: [] });
+            events.push({ type: 'done', traceIds: [...traceIds] });
             done = true;
           }
 
@@ -177,7 +290,9 @@ export function backendFromPiAgent(agent: HikariAgent): ChatBackend {
             }
           }
         } finally {
+          unregisterApproval?.();
           unsub();
+          agent.reset();
           await promptPromise;
         }
       })();
@@ -193,6 +308,10 @@ export function backendFromPiAgent(agent: HikariAgent): ChatBackend {
  * - `POST /chat` — ストリーム開始。`{ sessionId, requestId }` を返す
  * - `GET  /events?requestId=...` — 指定リクエストの SSE ストリーム
  * - `GET  /healthz` — ヘルスチェック
+ * - `GET  /traces` — 監査トレース HTML（`devtools` 指定時）
+ * - `GET  /capabilities` — ケイパビリティ探索 HTML（`devtools` 指定時）
+ * - `GET  /capabilities/:name/form` — ケイパビリティ入力フォーム HTML（`devtools` 指定時）
+ * - `{httpApi.basePath}/*` — REST ケイパビリティ API（`httpApi` 指定時）
  *
  * @param backend - LLM またはエージェントのチャットバックエンド。
  * @param options - ポート・ホスト・認証・CORS・セッション管理などの設定。
@@ -203,8 +322,12 @@ export function createChatServer(backend: ChatBackend, options: ChatServerOption
   const serveUi = options.serveStaticUi ?? true;
   const corsOrigins = options.corsOrigins ?? [];
   const sessionMgr = options.sessions;
-
-  const pendingStreams = new Map<string, AsyncIterator<ChatStreamEvent>>();
+  const approvals = options.approvals;
+  const devtools = options.devtools;
+  const traceViewer = devtools ? createTraceViewer(devtools.storage) : undefined;
+  const capExplorer = devtools ? createCapabilityExplorer(devtools.registry) : undefined;
+  const devtoolsRegistry = devtools?.registry;
+  const httpApiBasePath = options.httpApi?.basePath ?? '/api';
 
   /** DEV-ONLY fallback. Never use in production — trusts a client-controlled header. */
   const defaultResolve: (req: IncomingMessage) => ExecutionOptions = (req) => ({
@@ -213,6 +336,23 @@ export function createChatServer(backend: ChatBackend, options: ChatServerOption
     sessionId: undefined,
   });
   const resolveOptions = options.resolveExecutionOptions ?? defaultResolve;
+  const rateLimitGuard = options.rateLimitGuard;
+
+  const httpApi: HttpAdapter | undefined = options.httpApi
+    ? createHttpAdapter(options.httpApi.registry, options.httpApi.engine, {
+        basePath: options.httpApi.basePath ?? '/api',
+        resolveExecutionOptions: resolveOptions,
+        corsOrigins,
+        rateLimitGuard,
+      })
+    : undefined;
+
+  type PendingStream = {
+    iter: AsyncIterator<ChatStreamEvent>;
+    sessionId?: string;
+  };
+
+  const pendingStreams = new Map<string, PendingStream>();
 
   const setCors = (req: IncomingMessage, res: ServerResponse): void => {
     const origin = req.headers['origin'];
@@ -221,6 +361,27 @@ export function createChatServer(backend: ChatBackend, options: ChatServerOption
       res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
     }
+  };
+
+  const parseApprovalActionBody = (
+    raw: string,
+    contentType: string | undefined,
+  ): { by?: string; reason?: string } => {
+    if (!raw.trim()) return {};
+    const type = (contentType ?? '').split(';')[0]?.trim().toLowerCase();
+    if (type === 'application/x-www-form-urlencoded') {
+      const params = new URLSearchParams(raw);
+      return {
+        by: params.get('by') ?? undefined,
+        reason: params.get('reason') ?? undefined,
+      };
+    }
+    return JSON.parse(raw) as { by?: string; reason?: string };
+  };
+
+  const wantsHtmlResponse = (req: IncomingMessage): boolean => {
+    const accept = req.headers.accept ?? '';
+    return accept.includes('text/html');
   };
 
   async function readBody(req: IncomingMessage, maxBytes = 512 * 1024): Promise<string> {
@@ -266,11 +427,145 @@ export function createChatServer(backend: ChatBackend, options: ChatServerOption
       return;
     }
 
+    if (httpApi && (await httpApi.handler(req, res))) {
+      return;
+    }
+
+    if (method === 'GET' && url === '/traces' && traceViewer) {
+      const spans = await traceViewer.listTraces();
+      const html = traceViewer.renderHtml(spans);
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+      return;
+    }
+
+    if (method === 'GET' && url === '/capabilities' && capExplorer) {
+      const html = capExplorer.renderHtml();
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+      return;
+    }
+
+    if (method === 'GET' && devtoolsRegistry) {
+      const formMatch = /^\/capabilities\/([^/]+)\/form$/.exec(url);
+      if (formMatch) {
+        const capabilityName = decodeURIComponent(formMatch[1] ?? '');
+        const cap = devtoolsRegistry.get(capabilityName);
+        if (!cap) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: `Capability not found: ${capabilityName}` }));
+          return;
+        }
+        const meta = buildCapabilityMeta(cap);
+        const html = renderCapabilityFormHtml(meta, {
+          actionUrl: `${httpApiBasePath}/capabilities/${encodeURIComponent(capabilityName)}`,
+          listUrl: '/capabilities',
+        });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(html);
+        return;
+      }
+    }
+
+    if (method === 'GET' && url === '/approvals' && approvals) {
+      const pending = await Promise.resolve(approvals.listPending());
+      const html = renderApprovalPageHtml(pending);
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+      return;
+    }
+
+    if (method === 'GET' && url === '/approvals/pending' && approvals) {
+      const pending = await Promise.resolve(approvals.listPending());
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ pending }));
+      return;
+    }
+
+    if (method === 'POST' && url.startsWith('/approvals/') && approvals) {
+      const parts = url.split('/').filter(Boolean);
+      const id = parts[1];
+      const action = parts[2];
+      if (!id || (action !== 'approve' && action !== 'reject')) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Use POST /approvals/:id/approve or /reject' }));
+        return;
+      }
+      try {
+        const raw = await readBody(req);
+        const body = raw
+          ? parseApprovalActionBody(raw, req.headers['content-type'] as string | undefined)
+          : {};
+        const execOptions = resolveOptions(req);
+        const actor = body.by ?? execOptions.userId;
+        const ok = await Promise.resolve(
+          action === 'approve'
+            ? approvals.approve(id, actor)
+            : approvals.reject(id, actor, body.reason),
+        );
+        if (wantsHtmlResponse(req)) {
+          res.writeHead(ok ? 303 : 404, { Location: '/approvals' });
+          res.end();
+          return;
+        }
+        res.writeHead(ok ? 200 : 404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok, id, action }));
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+      }
+      return;
+    }
+
     if (method === 'POST' && url === '/chat') {
       try {
         const raw = await readBody(req);
         const body = JSON.parse(raw) as { message: string; sessionId?: string };
         const execOptions = resolveOptions(req);
+
+        if (rateLimitGuard) {
+          const limited = await Promise.resolve(
+            rateLimitGuard.check({
+              ip: clientIpFromRequest(req),
+              userId: execOptions.userId,
+            }),
+          );
+          if (!limited.allowed) {
+            res.writeHead(429, {
+              'Content-Type': 'application/json',
+              'Retry-After': String(limited.retryAfterSeconds),
+            });
+            res.end(
+              JSON.stringify({
+                error: {
+                  code: 'RATE_LIMITED',
+                  message: 'Too many requests',
+                  retryAfterSeconds: limited.retryAfterSeconds,
+                },
+              }),
+            );
+            return;
+          }
+        }
+
+        const approveMatch = body.message.match(/^\/approve\s+(\S+)\s*$/i);
+        const rejectMatch = body.message.match(/^\/reject\s+(\S+)(?:\s+(.+))?$/i);
+        if (approvals && approveMatch) {
+          const id = approveMatch[1];
+          const ok = await Promise.resolve(approvals.approve(id, execOptions.userId));
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok, id, action: 'approve' }));
+          return;
+        }
+        if (approvals && rejectMatch) {
+          const id = rejectMatch[1];
+          const reason = rejectMatch[2]?.trim();
+          const ok = await Promise.resolve(approvals.reject(id, execOptions.userId, reason));
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok, id, action: 'reject', reason }));
+          return;
+        }
+
         const sessionId = body.sessionId ?? sessionMgr?.createSession(execOptions.userId).id;
 
         const history: ChatMessage[] = sessionId && sessionMgr
@@ -289,10 +584,12 @@ export function createChatServer(backend: ChatBackend, options: ChatServerOption
           sessionId,
         })[Symbol.asyncIterator]();
 
-        pendingStreams.set(requestId, iter);
+        pendingStreams.set(requestId, { iter, sessionId });
         setTimeout(() => {
-          if (pendingStreams.delete(requestId)) {
-            iter.return?.();
+          const pending = pendingStreams.get(requestId);
+          if (pending) {
+            pendingStreams.delete(requestId);
+            pending.iter.return?.();
           }
         }, 120_000);
 
@@ -312,13 +609,14 @@ export function createChatServer(backend: ChatBackend, options: ChatServerOption
         res.end('Missing requestId');
         return;
       }
-      const iter = pendingStreams.get(requestId);
-      if (!iter) {
+      const pending = pendingStreams.get(requestId);
+      if (!pending) {
         res.writeHead(404);
         res.end('Stream not found');
         return;
       }
       pendingStreams.delete(requestId);
+      const { iter, sessionId } = pending;
 
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
@@ -331,12 +629,27 @@ export function createChatServer(backend: ChatBackend, options: ChatServerOption
       };
 
       const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), 15_000);
+      let assistantText = '';
 
       try {
         let next = await iter.next();
         while (!next.done) {
-          send(next.value);
-          if (next.value.type === 'done' || next.value.type === 'error') break;
+          const event = next.value;
+          if (event.type === 'text_delta') {
+            assistantText += event.delta;
+          }
+          send(event);
+          if (event.type === 'done') {
+            if (sessionId && sessionMgr) {
+              sessionMgr.appendMessage(sessionId, {
+                role: 'assistant',
+                content: assistantText.trim() || '(completed)',
+                traceIds: event.traceIds,
+              });
+            }
+            break;
+          }
+          if (event.type === 'error') break;
           next = await iter.next();
         }
       } catch (err) {

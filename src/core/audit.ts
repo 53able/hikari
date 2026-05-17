@@ -3,6 +3,9 @@ import type { ExecutionContext } from './capability.js';
 
 /** エンジンがケイパビリティのライフサイクル中に記録するイベント種別。同じ `traceId` で1回の呼び出し全体を表す。 */
 export type AuditEventType =
+  | 'intent_recorded'
+  | 'plan_recorded'
+  | 'tool_selected'
   | 'capability_invoked'
   | 'policy_denied'
   | 'approval_requested'

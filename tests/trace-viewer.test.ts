@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { createInMemoryStorage, createAuditLog } from '../src/index.js';
-import { createTraceViewer } from '../src/devtools/trace-viewer.js';
+import {
+  createTraceViewer,
+  isHarnessAuditEntry,
+  partitionTraceEvents,
+} from '../src/devtools/trace-viewer.js';
 
 describe('createTraceViewer', () => {
   const storage = createInMemoryStorage();
@@ -52,5 +56,32 @@ describe('createTraceViewer', () => {
     const html = viewer.renderHtml(spans);
     expect(html).toContain('<!DOCTYPE html>');
     expect(html).toContain('ping');
+  });
+
+  it('partitions harness and capability events', async () => {
+    const storagePart = createInMemoryStorage();
+    const logPart = createAuditLog(storagePart);
+    const viewerPart = createTraceViewer(storagePart);
+    const ctxPart = { userId: 'u', sessionId: 's', traceId: 'tr-part', permissions: new Set<string>() };
+    await logPart.record('intent_recorded', '_harness', ctxPart, { metadata: { harness: true } });
+    await logPart.record('capability_invoked', 'ping', ctxPart);
+    await logPart.record('execution_succeeded', 'ping', ctxPart, { output: { pong: true } });
+    const span = await viewerPart.getTrace('tr-part');
+    const parts = partitionTraceEvents(span!.events);
+    expect(parts.harness).toHaveLength(1);
+    expect(parts.capability).toHaveLength(2);
+    expect(isHarnessAuditEntry(parts.harness[0]!)).toBe(true);
+  });
+
+  it('renderHtml separates harness section', async () => {
+    const storage3 = createInMemoryStorage();
+    const log3 = createAuditLog(storage3);
+    const viewer3 = createTraceViewer(storage3);
+    const ctx3 = { userId: 'u', sessionId: 's', traceId: 'tr-h', permissions: new Set<string>() };
+    await log3.record('plan_recorded', '_harness', ctx3, { metadata: { harness: true } });
+    await log3.record('execution_succeeded', 'ping', ctx3, { output: { ok: true } });
+    const html = viewer3.renderHtml(await viewer3.listTraces());
+    expect(html).toContain('Harness (intent / plan / tool selection)');
+    expect(html).toContain('Capability execution');
   });
 });
