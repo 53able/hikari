@@ -82,7 +82,7 @@ jobs:
               exit 1
             fi
             AUTH_TOKEN="${NPM_SECRET}"
-            echo "Auth: NPM_TOKEN secret (Automation)"
+            echo "Auth: NPM_TOKEN secret"
           fi
 
           if [ -z "${AUTH_TOKEN}" ]; then
@@ -91,6 +91,16 @@ jobs:
           fi
 
           echo "NPM_TOKEN=${AUTH_TOKEN}" >> "$GITHUB_ENV"
+
+          if ! OUT=$(npm publish --dry-run --ignore-scripts --tag beta 2>&1); then
+            echo "$OUT"
+            if echo "$OUT" | grep -qE 'EOTP|one-time password'; then
+              echo "::error::NPM_TOKEN cannot publish (2FA/EOTP). npm whoami alone is not enough. Create token type Automation (not Publish/Granular/Classic): https://www.npmjs.com/settings/~tokens → Generate New Token → Automation → printf '%s' 'TOKEN' | gh secret set NPM_TOKEN --repo 53able/hikari"
+              exit 1
+            fi
+            exit 1
+          fi
+          echo "$OUT"
 
       - name: Publish version if git tag exists but npm does not
         run: |
