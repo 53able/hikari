@@ -58,18 +58,37 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ -n "${NODE_AUTH_TOKEN:-}" ] && npm whoami >/dev/null 2>&1; then
-            echo "NPM_TOKEN=${NODE_AUTH_TOKEN}" >> "$GITHUB_ENV"
-            echo "Auth: OIDC (Trusted Publisher via setup-node)"
-          elif [ -n "${NPM_SECRET:-}" ]; then
-            echo "//registry.npmjs.org/:_authToken=${NPM_SECRET}" >> "${HOME}/.npmrc"
-            echo "NPM_TOKEN=${NPM_SECRET}" >> "$GITHUB_ENV"
-            npm whoami
-            echo "Auth: NPM_TOKEN secret (must be Automation type)"
-          else
-            echo "::error::npm auth missing. Either configure Trusted Publisher for workflow ci.yml on https://www.npmjs.com/package/@53able/hikari or set NPM_TOKEN to an Automation token."
+          NPMRC="${NPM_CONFIG_USERCONFIG:-${HOME}/.npmrc}"
+
+          write_npmrc_token() {
+            printf '%s\n' "//registry.npmjs.org/:_authToken=$1" > "${NPMRC}"
+          }
+
+          AUTH_TOKEN=""
+          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            write_npmrc_token "${NODE_AUTH_TOKEN}"
+            if npm whoami >/dev/null 2>&1; then
+              AUTH_TOKEN="${NODE_AUTH_TOKEN}"
+              echo "Auth: OIDC (Trusted Publisher via setup-node)"
+            fi
+          fi
+
+          if [ -z "${AUTH_TOKEN}" ] && [ -n "${NPM_SECRET:-}" ]; then
+            write_npmrc_token "${NPM_SECRET}"
+            if ! npm whoami; then
+              echo "::error::NPM_TOKEN rejected (401). Use an Automation token for the npm user that owns @53able/hikari. Re-set without a trailing newline: printf '%s' 'TOKEN' | gh secret set NPM_TOKEN --repo 53able/hikari"
+              exit 1
+            fi
+            AUTH_TOKEN="${NPM_SECRET}"
+            echo "Auth: NPM_TOKEN secret (Automation)"
+          fi
+
+          if [ -z "${AUTH_TOKEN}" ]; then
+            echo "::error::npm auth missing. Configure Trusted Publisher for ci.yml on https://www.npmjs.com/package/@53able/hikari or set NPM_TOKEN to an Automation token."
             exit 1
           fi
+
+          echo "NPM_TOKEN=${AUTH_TOKEN}" >> "$GITHUB_ENV"
 
           if ! OUT=$(npm publish --dry-run --tag beta 2>&1); then
             echo "$OUT"
