@@ -37,6 +37,22 @@ export { renderTraceHtml } from './devtools/trace-html.js';
 export { createCapabilityExplorer } from './devtools/cap-explorer.js';
 export type { CapabilityExplorer } from './devtools/cap-explorer.js';
 export {
+  createCapabilityInvoker,
+  parseInvokeCliArgs,
+  formatInvokeReport,
+  runInvokeCli,
+  invokeRequestSchema,
+  invokeReportSchema,
+} from './devtools/invoker.js';
+export type {
+  CapabilityInvoker,
+  CapabilityInvokerOptions,
+  InvokeRequest,
+  InvokeReport,
+  InvokeCliDefaults,
+  ParsedInvokeCli,
+} from './devtools/invoker.js';
+export {
   createInMemoryApprovalStore,
   createApprovalStore,
   createApprovalApi,
