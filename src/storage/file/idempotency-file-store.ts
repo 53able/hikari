@@ -1,8 +1,8 @@
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
-import type { ExecutionResult } from './execution.js';
-import type { IdempotencyRecord, IdempotencyStore } from './idempotency-store.js';
+import type { ExecutionResult } from '../../core/execution.js';
+import type { IdempotencyRecord, IdempotencyStore } from '../../core/idempotency-store.js';
 
 const executionResultSchema = z.object({
   success: z.literal(true),

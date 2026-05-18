@@ -1,7 +1,7 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { ApprovalRequest } from './approval.js';
-import type { ApprovalApi, ApprovalStore, StoredApprovalRequest } from './approval-store.js';
+import type { ApprovalRequest } from '../../core/approval.js';
+import type { ApprovalApi, ApprovalStore, StoredApprovalRequest } from '../../core/approval-store.js';
 
 /** JSONL 1 行分の承認イベント。 */
 export type ApprovalFileEvent = {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createRedisIdempotencyStore } from '../src/core/redis-idempotency.js';
+import { createRedisIdempotencyStore } from '../src/storage/redis/redis-idempotency.js';
 import { createFakeRedis } from './helpers/redis-fake.js';
 
 describe('createRedisIdempotencyStore', () => {
@@ -28,7 +28,7 @@ describe('createRedisIdempotencyStore', () => {
 
 describe.skipIf(!process.env.REDIS_URL)('createRedisIdempotencyStore integration', () => {
   it('connects to real Redis when REDIS_URL is set', async () => {
-    const { connectHikariRedis } = await import('../src/core/redis-client.js');
+    const { connectHikariRedis } = await import('../src/storage/redis/redis-client.js');
     const { redis, disconnect } = await connectHikariRedis();
     const store = createRedisIdempotencyStore(redis, { keyPrefix: 'hikari:test:' });
     const key = `it-${Date.now()}`;

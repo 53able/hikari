@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createRedisApprovalStore } from '../src/core/redis-approval.js';
+import { createRedisApprovalStore } from '../src/storage/redis/redis-approval.js';
 import type { ApprovalRequest } from '../src/core/approval.js';
 import { createFakeRedis } from './helpers/redis-fake.js';
 

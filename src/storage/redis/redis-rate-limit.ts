@@ -6,7 +6,7 @@ import type {
   RateLimitRule,
   RateLimiter,
   SlidingWindowRateLimiterOptions,
-} from './rate-limit.js';
+} from '../../core/rate-limit.js';
 
 /** `createRedisSlidingWindowRateLimiter` のオプション。 */
 export type RedisSlidingWindowRateLimiterOptions = SlidingWindowRateLimiterOptions & {

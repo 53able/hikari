@@ -2,13 +2,13 @@ import { watch } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import { z } from 'zod';
-import type { ApprovalRequest } from './approval.js';
+import type { ApprovalRequest } from '../../core/approval.js';
 import {
   createApprovalStore,
   type ApprovalStore,
   type ApprovalStorePersistence,
   type StoredApprovalRequest,
-} from './approval-store.js';
+} from '../../core/approval-store.js';
 
 const approvalRequestStatusSchema = z.enum(['pending', 'approved', 'rejected']);
 
@@ -84,6 +84,7 @@ const toApprovalRequest = (stored: StoredApprovalRequest): ApprovalRequest => ({
     sessionId: stored.sessionId,
     traceId: stored.traceId,
     permissions: new Set(),
+    runtime: {},
   },
   riskLevel: stored.riskLevel,
   requestedAt: stored.requestedAt,

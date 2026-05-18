@@ -1,5 +1,5 @@
 import type { HikariRedis } from './redis-client.js';
-import { createDefaultRateLimitGuard, type RateLimitGuard } from './rate-limit.js';
+import { createDefaultRateLimitGuard, type RateLimitGuard } from '../../core/rate-limit.js';
 import { createRedisSlidingWindowRateLimiter, createRedisRateLimitGuard } from './redis-rate-limit.js';
 
 const envInt = (name: string, fallback: number): number => {
