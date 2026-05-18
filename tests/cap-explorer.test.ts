@@ -38,4 +38,10 @@ describe('createCapabilityExplorer', () => {
     expect(html).toContain('<title>Hikari Capability Explorer</title>');
     expect(html).toContain('sample_read');
   });
+
+  it('uses custom uiBasePath in form links', () => {
+    const custom = createCapabilityExplorer(registry, { uiBasePath: '/dev/caps' });
+    const html = custom.renderHtml();
+    expect(html).toContain('href="/dev/caps/sample_read/form"');
+  });
 });

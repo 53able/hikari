@@ -9,9 +9,16 @@ import {
 import { PolicyViolationError } from '../core/policy.js';
 import { ApprovalDeniedError } from '../core/approval.js';
 import { buildCapabilityMeta, buildRegistryMeta, type CapabilityMeta } from '../core/cap-meta.js';
+import {
+  fieldsFromCapabilityMeta,
+  formUrlEncodedToCapabilityInput,
+  FormBodyParseError,
+} from '../web/cap-form-schema.js';
 import { exportOpenApiDocument } from '../core/openapi-export.js';
 import type { RateLimitGuard } from '../core/rate-limit.js';
 import { clientIpFromRequest } from '../core/rate-limit.js';
+import { wantsHtmlResponse } from '../web/http-request.js';
+import { renderCapabilityResultHtml } from '../web/cap-result-page.js';
 
 export type { CapabilityMeta };
 
@@ -27,6 +34,13 @@ export interface HttpAdapterOptions {
   corsOrigins?: string[];
   /** 指定時は POST 実行前に IP / userId / capability 単位でレート制限する。 */
   rateLimitGuard?: RateLimitGuard;
+  /**
+   * `Accept: text/html` の POST 実行時に結果 HTML を返す。
+   * `uiBasePath` はフォーム・一覧へのリンク用（デフォルト: `/capabilities`）。
+   */
+  capabilityResultHtml?: {
+    readonly uiBasePath?: string;
+  };
 }
 
 /**
@@ -65,6 +79,34 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(payload);
 }
 
+const sendHtml = (res: ServerResponse, status: number, html: string): void => {
+  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end(html);
+};
+
+const sendCapabilityResponse = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  capabilityName: string,
+  uiBasePath: string,
+): void => {
+  if (!wantsHtmlResponse(req)) {
+    sendJson(res, status, body);
+    return;
+  }
+  const formUrl = `${uiBasePath}/${encodeURIComponent(capabilityName)}/form`;
+  const html = renderCapabilityResultHtml({
+    capabilityName,
+    status,
+    body,
+    formUrl,
+    listUrl: uiBasePath,
+  });
+  sendHtml(res, status, html);
+};
+
 async function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = '';
@@ -90,6 +132,9 @@ function errorToResponse(err: unknown): { status: number; body: unknown } {
   }
   if (err instanceof ValidationError) {
     return { status: 400, body: { error: { code: 'VALIDATION_ERROR', message: err.message, issues: err.issues } } };
+  }
+  if (err instanceof FormBodyParseError) {
+    return { status: 400, body: { error: { code: 'VALIDATION_ERROR', message: err.message } } };
   }
   if (err instanceof PolicyViolationError) {
     return { status: 403, body: { error: { code: 'FORBIDDEN', message: err.message } } };
@@ -124,6 +169,7 @@ export function createHttpAdapter(
   const basePath = options.basePath ?? '';
   const maxBodyBytes = options.maxBodyBytes ?? 1024 * 1024;
   const corsOrigins = options.corsOrigins ?? [];
+  const uiBasePath = options.capabilityResultHtml?.uiBasePath ?? '/capabilities';
 
   const setCors = (req: IncomingMessage, res: ServerResponse): void => {
     const origin = req.headers['origin'];
@@ -175,9 +221,29 @@ export function createHttpAdapter(
 
     if (method === 'POST' && url.startsWith(capPath)) {
       const name = decodeURIComponent(url.slice(capPath.length).split('?')[0]);
+      const cap = registry.get(name);
+      if (!cap) {
+        const notFoundBody = {
+          error: { code: 'NOT_FOUND', message: `Capability '${name}' not found` },
+        };
+        sendCapabilityResponse(req, res, 404, notFoundBody, name, uiBasePath);
+        return true;
+      }
       try {
         const rawBody = await readBody(req, maxBodyBytes);
-        const input = rawBody ? JSON.parse(rawBody) : {};
+        const contentType = (req.headers['content-type'] ?? '')
+          .split(';')[0]
+          ?.trim()
+          .toLowerCase();
+        const input =
+          !rawBody
+            ? {}
+            : contentType === 'application/x-www-form-urlencoded'
+              ? formUrlEncodedToCapabilityInput(
+                  fieldsFromCapabilityMeta(buildCapabilityMeta(cap)),
+                  new URLSearchParams(rawBody),
+                )
+              : (JSON.parse(rawBody) as Record<string, unknown>);
         const execOptions = mergeIdempotencyKey(req, await options.resolveExecutionOptions(req));
         if (options.rateLimitGuard) {
           const limited = await Promise.resolve(
@@ -205,10 +271,10 @@ export function createHttpAdapter(
           }
         }
         const result = await engine.execute(name, input, execOptions);
-        sendJson(res, 200, result);
+        sendCapabilityResponse(req, res, 200, result, name, uiBasePath);
       } catch (err) {
         const { status, body } = errorToResponse(err);
-        sendJson(res, status, body);
+        sendCapabilityResponse(req, res, status, body, name, uiBasePath);
       }
       return true;
     }

@@ -27,6 +27,22 @@ export const executionOptionsSchema = z.object({
 /** エンジン呼び出し時に呼び出し元が渡すオプション。 */
 export type ExecutionOptions = z.infer<typeof executionOptionsSchema>;
 
+/** `permissions` を常に配列にした実行オプション（Hono Variables 等で利用）。 */
+export type NormalizedExecutionOptions = ExecutionOptions & {
+  readonly permissions: readonly string[];
+};
+
+/**
+ * 省略可能な `permissions` を空配列に正規化する。
+ * @param options - 生の実行オプション。
+ */
+export const normalizeExecutionOptions = (
+  options: ExecutionOptions,
+): NormalizedExecutionOptions => ({
+  ...options,
+  permissions: options.permissions ?? [],
+});
+
 /** `Engine.execute` が成功時に返す結果オブジェクト。 */
 export interface ExecutionResult<T = unknown> {
   success: true;
