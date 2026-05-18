@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { defineCapability } from '../../src/index.js';
+import type { CapabilityRuntime } from '../../src/core/capability.js';
 
 const BookSchema = z.object({
   id: z.string(),
@@ -11,12 +12,22 @@ const BookSchema = z.object({
 
 type Book = z.infer<typeof BookSchema>;
 
+/** 書店サンプル用の決定論的ランタイム。`createEngine({ runtime })` に渡す。 */
+export type BookstoreRuntime = CapabilityRuntime & {
+  readonly books: Map<string, Book>;
+};
+
 // In-memory store (replace with real DB in production)
 const books = new Map<string, Book>([
   ['1', { id: '1', title: 'Clean Code', author: 'Robert C. Martin', price: 29.99, stock: 5 }],
   ['2', { id: '2', title: 'The Pragmatic Programmer', author: 'David Thomas', price: 34.99, stock: 3 }],
   ['3', { id: '3', title: 'Design Patterns', author: 'GoF', price: 44.99, stock: 2 }],
 ]);
+
+export const bookstoreRuntime: BookstoreRuntime = { books };
+
+const bookStore = (runtime: CapabilityRuntime): Map<string, Book> =>
+  (runtime as BookstoreRuntime).books;
 
 export const listBooks = defineCapability({
   name: 'list_books',
@@ -30,8 +41,8 @@ export const listBooks = defineCapability({
     sideEffects: ['read'],
     auditLevel: 'basic',
   },
-  async handler({ filter }) {
-    const all = Array.from(books.values());
+  async handler({ filter }, context) {
+    const all = Array.from(bookStore(context.runtime).values());
     if (!filter) return all;
     const q = filter.toLowerCase();
     return all.filter(
@@ -50,8 +61,8 @@ export const getBook = defineCapability({
     sideEffects: ['read'],
     auditLevel: 'basic',
   },
-  async handler({ bookId }) {
-    const book = books.get(bookId);
+  async handler({ bookId }, context) {
+    const book = bookStore(context.runtime).get(bookId);
     if (!book) throw new Error(`Book '${bookId}' not found`);
     return book;
   },
@@ -76,8 +87,9 @@ export const purchaseBook = defineCapability({
     requiresApproval: true,
     auditLevel: 'full',
   },
-  async handler({ bookId, quantity }) {
-    const book = books.get(bookId);
+  async handler({ bookId, quantity }, context) {
+    const store = bookStore(context.runtime);
+    const book = store.get(bookId);
     if (!book) throw new Error(`Book '${bookId}' not found`);
     if (book.stock < quantity) {
       throw new Error(`Insufficient stock: only ${book.stock} available`);
@@ -107,10 +119,11 @@ export const addBook = defineCapability({
     sideEffects: ['write'],
     auditLevel: 'full',
   },
-  async handler({ title, author, price, stock }) {
+  async handler({ title, author, price, stock }, context) {
+    const store = bookStore(context.runtime);
     const id = String(Date.now());
     const book: Book = { id, title, author, price, stock };
-    books.set(id, book);
+    store.set(id, book);
     return book;
   },
 });
@@ -127,9 +140,10 @@ export const deleteBook = defineCapability({
     requiresApproval: true,
     auditLevel: 'full',
   },
-  async handler({ bookId }) {
-    if (!books.has(bookId)) throw new Error(`Book '${bookId}' not found`);
-    books.delete(bookId);
+  async handler({ bookId }, context) {
+    const store = bookStore(context.runtime);
+    if (!store.has(bookId)) throw new Error(`Book '${bookId}' not found`);
+    store.delete(bookId);
     return { deleted: true, message: `Book '${bookId}' permanently removed` };
   },
 });

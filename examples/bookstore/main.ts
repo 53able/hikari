@@ -5,7 +5,14 @@ import {
   createEngine,
   devAutoApprove,
 } from '../../src/index.js';
-import { listBooks, getBook, purchaseBook, addBook, deleteBook } from './capabilities.js';
+import {
+  listBooks,
+  getBook,
+  purchaseBook,
+  addBook,
+  deleteBook,
+  bookstoreRuntime,
+} from './capabilities.js';
 
 // --- Setup (factory functions, no `new`) ---
 const registry = createRegistry()
@@ -17,7 +24,12 @@ const registry = createRegistry()
 
 const storage = createInMemoryStorage();
 const auditLog = createAuditLog(storage);
-const engine = createEngine({ registry, auditLog, approvalGate: devAutoApprove });
+const engine = createEngine({
+  registry,
+  auditLog,
+  approvalGate: devAutoApprove,
+  runtime: bookstoreRuntime,
+});
 
 async function run() {
   console.log('═══════════════════════════════════════');

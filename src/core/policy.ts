@@ -79,6 +79,39 @@ export const policy = {
   }),
 } as const;
 
+/** `resolveEffectivePolicy` の戻り値。宣言ポリシーに実行時の昇格ルールを反映する。 */
+export type EffectivePolicy = {
+  readonly policy: Policy;
+  readonly auditLevel: Policy['auditLevel'];
+  readonly requiresApproval: boolean;
+  /** `sideEffects` に `external` が含まれる場合は `true`（レート制限必須）。 */
+  readonly requiresRateLimit: boolean;
+};
+
+/**
+ * 副作用に基づき監査レベル・承認・レート制限要件を解決する。
+ * - `write` / `financial` / `irreversible` を含む場合、`basic` 監査は `full` に昇格
+ * - `external` を含む場合はレート制限が必須
+ */
+export const resolveEffectivePolicy = (
+  policy: Policy,
+  input?: unknown,
+): EffectivePolicy => {
+  const auditEscalation: readonly SideEffectType[] = ['write', 'financial', 'irreversible'];
+  const hasElevatedSideEffect = policy.sideEffects.some((effect) =>
+    auditEscalation.includes(effect),
+  );
+  const auditLevel =
+    hasElevatedSideEffect && policy.auditLevel === 'basic' ? 'full' : policy.auditLevel;
+
+  return {
+    policy,
+    auditLevel,
+    requiresApproval: needsHumanApproval(policy, input),
+    requiresRateLimit: policy.sideEffects.includes('external'),
+  };
+};
+
 /** 承認プロンプトや監査レコードに表示するために、最もリスクの高い副作用を文字列で返す。 */
 export function describeRisk(sideEffects: SideEffectType[]): string {
   if (sideEffects.includes('financial')) return 'financial';

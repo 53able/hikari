@@ -1,10 +1,13 @@
 import { access } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { Registry } from '../core/registry.js';
+import type { CapabilityRuntime } from '../core/capability.js';
 
 export interface LoadedModule {
   registry: Registry;
   modulePath: string;
+  /** エントリが `export const runtime` を公開している場合に設定される。 */
+  runtime?: CapabilityRuntime;
 }
 
 export async function loadRegistryFrom(
@@ -53,5 +56,7 @@ export async function loadRegistryFrom(
     );
   }
 
-  return { registry, modulePath };
+  const runtime = mod.runtime as CapabilityRuntime | undefined;
+
+  return { registry, modulePath, runtime };
 }
