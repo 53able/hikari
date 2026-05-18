@@ -1,6 +1,8 @@
 export * from './core/index.js';
 export { createClaudeAdapter } from './adapters/claude.js';
 export type { ClaudeAdapter, ChatOptions, ChatResult } from './adapters/claude.js';
+export { createOpenAiAdapter } from './adapters/openai.js';
+export type { OpenAiAdapter, OpenAiChatMessage } from './adapters/openai.js';
 export {
   createHikariAgent,
   createHikariAgentWithOptions,
@@ -19,9 +21,70 @@ export type {
 export type { PiChatBackendDeps } from './web/chat-server.js';
 export { createHttpAdapter } from './adapters/http.js';
 export type { HttpAdapter, HttpAdapterOptions, CapabilityMeta } from './adapters/http.js';
+export {
+  createHikariHttpMiddleware,
+  createHikariExecutionOptionsMiddleware,
+  mountHikariHttpAdapter,
+  mountHikariCapabilityUi,
+  mountHikariTraceViewer,
+  mountHikariApprovals,
+  mountHikariChat,
+} from './adapters/hono.js';
+export type {
+  MountHikariHttpAdapterOptions,
+  MountHikariCapabilityUiOptions,
+  MountHikariTraceViewerOptions,
+  MountHikariApprovalsOptions,
+  MountHikariChatOptions,
+  HikariHonoEnv,
+  HikariHonoVariables,
+} from './adapters/hono.js';
+export { parseCookieHeader } from './web/auth.js';
+export {
+  HIKARI_USER_ID_COOKIE,
+  HIKARI_PERMISSIONS_COOKIE,
+  devSessionCookieOptions,
+  parseDevSessionFormBody,
+  appendDevSessionSetCookieHeaders,
+  redirectWithDevSessionCookies,
+  isDevSessionEnabledByEnv,
+} from './web/dev-session.js';
+export type { DevSessionForm } from './web/dev-session.js';
+export { wantsHtmlResponse, parseApprovalActionBody } from './web/http-request.js';
+export { renderCapabilityDevSessionHtml } from './web/cap-dev-session-page.js';
+export { renderCapabilityResultHtml } from './web/cap-result-page.js';
+export type { CapabilityResultPageOptions } from './web/cap-result-page.js';
+export {
+  createCapabilityUiHandlers,
+} from './web/capability-ui.js';
+export type {
+  CapabilityUiHandlers,
+  CapabilityUiPathOptions,
+  ResolvedCapabilityUiPaths,
+} from './web/capability-ui.js';
+export {
+  resolveLlmFromEnv,
+  resolveServeChatBackend,
+  chatLlmProviderSchema,
+  serveLlmProviderSchema,
+  missingLlmApiKeyMessage,
+} from './adapters/llm-provider.js';
+export type {
+  LlmChatClient,
+  LlmChatMessage,
+  ResolvedChatLlmProvider,
+  ResolvedServeLlmProvider,
+  ServeChatBackendDeps,
+  ResolvedServeChatBackend,
+} from './adapters/llm-provider.js';
 export { createSessionManager } from './agent/session.js';
 export type { Session, SessionMessage, SessionManager, SessionManagerOptions } from './agent/session.js';
-export { createChatServer, backendFromClaude, backendFromPiAgent } from './web/chat-server.js';
+export {
+  createChatServer,
+  backendFromClaude,
+  backendFromOpenAi,
+  backendFromPiAgent,
+} from './web/chat-server.js';
 export type { ChatServer, ChatServerOptions, ChatBackend, ChatMessage, ChatStreamEvent } from './web/chat-server.js';
 export { renderChatHtml } from './web/chat-ui.js';
 export type { ChatUiOptions } from './web/chat-ui.js';
@@ -82,8 +145,10 @@ export {
 } from './web/auth.js';
 export {
   executionOptionsSchema,
+  normalizeExecutionOptions,
   IdempotencyConflictError,
 } from './core/execution.js';
+export type { NormalizedExecutionOptions } from './core/execution.js';
 export {
   createInMemoryIdempotencyStore,
   hashCapabilityInput,
