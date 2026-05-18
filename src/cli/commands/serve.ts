@@ -58,7 +58,8 @@ export const serveCommand: CliCommand = async (ctx, args) => {
       createRedisIdempotencyStore,
       createRedisApprovalStore,
     } = await import('../../core/index.js');
-    const { createChatServer, backendFromPiAgent } = await import('../../web/chat-server.js');
+    const { createChatServer } = await import('../../web/chat-server.js');
+    const { resolveServeChatBackend } = await import('../../adapters/llm-provider.js');
     const { createSessionManager } = await import('../../agent/session.js');
     const { createHeaderExecutionOptionsResolver } = await import('../../web/auth.js');
 
@@ -142,7 +143,7 @@ export const serveCommand: CliCommand = async (ctx, args) => {
       idempotencyStore,
     });
 
-    const backend = backendFromPiAgent({
+    const { backend, provider: llmProvider } = resolveServeChatBackend({
       registry,
       engine,
       harness,
@@ -152,7 +153,10 @@ export const serveCommand: CliCommand = async (ctx, args) => {
       },
     });
 
-    const resolveExecutionOptions = createHeaderExecutionOptionsResolver();
+    const devSessionEnabled = process.env.HIKARI_DEV_SESSION !== '0';
+    const resolveExecutionOptions = createHeaderExecutionOptionsResolver({
+      readCookies: devSessionEnabled,
+    });
 
     const server = createChatServer(backend, {
       port,
@@ -161,14 +165,28 @@ export const serveCommand: CliCommand = async (ctx, args) => {
       resolveExecutionOptions,
       rateLimitGuard,
       devtools: { storage, registry },
-      httpApi: { registry, engine, basePath: '/api' },
+      enableDevSession: devSessionEnabled,
+      httpApi: {
+        registry,
+        engine,
+        basePath: '/api',
+        capabilityResultHtml: devSessionEnabled
+          ? { uiBasePath: '/capabilities' }
+          : undefined,
+      },
     });
 
     const { port: actualPort, host } = await server.listen();
     ctx.stdout.write(`Hikari Chat Server running at http://${host}:${actualPort}\n`);
+    ctx.stdout.write(`  LLM backend:  ${llmProvider} (LLM_PROVIDER / API keys)\n`);
     ctx.stdout.write(`  Traces:       http://${host}:${actualPort}/traces\n`);
     ctx.stdout.write(`  Capabilities: http://${host}:${actualPort}/capabilities\n`);
     ctx.stdout.write(`  Cap forms:    http://${host}:${actualPort}/capabilities/<name>/form\n`);
+    if (devSessionEnabled) {
+      ctx.stdout.write(
+        `  Dev session:  http://${host}:${actualPort}/capabilities/dev-session\n`,
+      );
+    }
     ctx.stdout.write(`  REST API:     http://${host}:${actualPort}/api/capabilities\n`);
     ctx.stdout.write(`  OpenAPI:      http://${host}:${actualPort}/api/openapi.json\n`);
     if (queueMode) {

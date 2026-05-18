@@ -2,6 +2,8 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { randomUUID } from 'node:crypto';
 import { renderChatHtml } from './chat-ui.js';
 import type { ClaudeAdapter } from '../adapters/claude.js';
+import type { OpenAiAdapter } from '../adapters/openai.js';
+import type { OpenAiChatMessage } from '../adapters/openai.js';
 import {
   createHikariAgent,
   chatHistoryToAgentMessages,
@@ -20,12 +22,16 @@ import type { AuditStorage } from '../core/audit.js';
 import { buildHarnessPlan } from '../core/harness-plan.js';
 import { createHttpAdapter, type HttpAdapter } from '../adapters/http.js';
 import { createTraceViewer } from '../devtools/trace-viewer.js';
-import { createCapabilityExplorer } from '../devtools/cap-explorer.js';
 import { renderApprovalPageHtml } from './approval-page.js';
-import { buildCapabilityMeta } from '../core/cap-meta.js';
-import { renderCapabilityFormHtml } from './cap-form-page.js';
+import { createCapabilityUiHandlers } from './capability-ui.js';
 import type { RateLimitGuard } from '../core/rate-limit.js';
 import { clientIpFromRequest } from '../core/rate-limit.js';
+import {
+  isDevSessionEnabledByEnv,
+  parseDevSessionFormBody,
+  redirectWithDevSessionCookies,
+} from './dev-session.js';
+import { parseApprovalActionBody, wantsHtmlResponse } from './http-request.js';
 
 /**
  * チャットターン中に `ChatBackend.stream` から emit される SSE イベント。
@@ -59,7 +65,7 @@ export interface ChatMessage {
 /**
  * ストリーミングチャットバックエンドの抽象インターフェース。
  * 任意の LLM やエージェントをプラグインするために実装する。
- * 組み込みファクトリー: `backendFromClaude`、`backendFromPiAgent`。
+ * 組み込みファクトリー: `backendFromClaude`、`backendFromOpenAi`、`backendFromPiAgent`。
  */
 export interface ChatBackend {
   /**
@@ -99,11 +105,20 @@ export interface ChatServerOptions {
     storage: AuditStorage;
     registry: Registry;
   };
+  /**
+   * 開発用 Cookie セッション UI（`GET/POST /capabilities/dev-session`）。
+   * 省略時は `devtools` 有効かつ `HIKARI_DEV_SESSION` が `0` でないとき有効。
+   */
+  enableDevSession?: boolean;
   /** REST ケイパビリティ API（デフォルトプレフィックス `/api`）。 */
   httpApi?: {
     registry: Registry;
     engine: Engine;
     basePath?: string;
+    /** `Accept: text/html` の POST 実行時に結果 HTML を返す。 */
+    capabilityResultHtml?: {
+      readonly uiBasePath?: string;
+    };
   };
 }
 
@@ -153,6 +168,42 @@ export function backendFromClaude(adapter: ClaudeAdapter): ChatBackend {
     },
   };
 }
+
+/**
+ * `OpenAiAdapter` を `ChatBackend` としてラップする。
+ * 非ストリーミングの `chat()` を呼び出し、全テキストを単一の `text_delta` イベントとして emit する。
+ */
+export const backendFromOpenAi = (adapter: OpenAiAdapter): ChatBackend => ({
+  stream(message, history, options) {
+    return (async function* () {
+      const messages: OpenAiChatMessage[] = [
+        ...history.map((entry) => ({
+          role: entry.role,
+          content: entry.content,
+        })),
+        { role: 'user', content: message },
+      ];
+      try {
+        const result = await adapter.chat(messages, {
+          userId: options.userId,
+          sessionId: options.sessionId,
+          traceId: options.traceId,
+          intent: options.intent,
+          permissions: options.permissions,
+        });
+        if (result.content) {
+          yield { type: 'text_delta' as const, delta: result.content };
+        }
+        yield { type: 'done' as const, traceIds: result.traceIds };
+      } catch (err) {
+        yield {
+          type: 'error' as const,
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
+    })();
+  },
+});
 
 /** `backendFromPiAgent` の依存関係。リクエストごとに Agent を生成しコンテキスト漏洩を防ぐ。 */
 export interface PiChatBackendDeps {
@@ -310,6 +361,7 @@ export function backendFromPiAgent(deps: PiChatBackendDeps): ChatBackend {
  * - `GET  /healthz` — ヘルスチェック
  * - `GET  /traces` — 監査トレース HTML（`devtools` 指定時）
  * - `GET  /capabilities` — ケイパビリティ探索 HTML（`devtools` 指定時）
+ * - `GET/POST /capabilities/dev-session` — 開発用 Cookie セッション（`enableDevSession` 時）
  * - `GET  /capabilities/:name/form` — ケイパビリティ入力フォーム HTML（`devtools` 指定時）
  * - `{httpApi.basePath}/*` — REST ケイパビリティ API（`httpApi` 指定時）
  *
@@ -325,9 +377,17 @@ export function createChatServer(backend: ChatBackend, options: ChatServerOption
   const approvals = options.approvals;
   const devtools = options.devtools;
   const traceViewer = devtools ? createTraceViewer(devtools.storage) : undefined;
-  const capExplorer = devtools ? createCapabilityExplorer(devtools.registry) : undefined;
-  const devtoolsRegistry = devtools?.registry;
   const httpApiBasePath = options.httpApi?.basePath ?? '/api';
+  const uiBasePath = options.httpApi?.capabilityResultHtml?.uiBasePath ?? '/capabilities';
+  const devSessionEnabled =
+    (options.enableDevSession ?? Boolean(devtools)) && isDevSessionEnabledByEnv();
+  const capabilityUi = devtools
+    ? createCapabilityUiHandlers(devtools.registry, {
+        apiBasePath: httpApiBasePath,
+        uiBasePath,
+        enableDevSession: devSessionEnabled,
+      })
+    : undefined;
 
   /** DEV-ONLY fallback. Never use in production — trusts a client-controlled header. */
   const defaultResolve: (req: IncomingMessage) => ExecutionOptions = (req) => ({
@@ -344,6 +404,9 @@ export function createChatServer(backend: ChatBackend, options: ChatServerOption
         resolveExecutionOptions: resolveOptions,
         corsOrigins,
         rateLimitGuard,
+        capabilityResultHtml:
+          options.httpApi.capabilityResultHtml ??
+          (devtools ? { uiBasePath } : undefined),
       })
     : undefined;
 
@@ -361,27 +424,6 @@ export function createChatServer(backend: ChatBackend, options: ChatServerOption
       res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
     }
-  };
-
-  const parseApprovalActionBody = (
-    raw: string,
-    contentType: string | undefined,
-  ): { by?: string; reason?: string } => {
-    if (!raw.trim()) return {};
-    const type = (contentType ?? '').split(';')[0]?.trim().toLowerCase();
-    if (type === 'application/x-www-form-urlencoded') {
-      const params = new URLSearchParams(raw);
-      return {
-        by: params.get('by') ?? undefined,
-        reason: params.get('reason') ?? undefined,
-      };
-    }
-    return JSON.parse(raw) as { by?: string; reason?: string };
-  };
-
-  const wantsHtmlResponse = (req: IncomingMessage): boolean => {
-    const accept = req.headers.accept ?? '';
-    return accept.includes('text/html');
   };
 
   async function readBody(req: IncomingMessage, maxBytes = 512 * 1024): Promise<string> {
@@ -439,28 +481,64 @@ export function createChatServer(backend: ChatBackend, options: ChatServerOption
       return;
     }
 
-    if (method === 'GET' && url === '/capabilities' && capExplorer) {
-      const html = capExplorer.renderHtml();
+    if (method === 'GET' && capabilityUi?.matchesListPath(url)) {
+      const html = capabilityUi.listHtml();
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);
       return;
     }
 
-    if (method === 'GET' && devtoolsRegistry) {
-      const formMatch = /^\/capabilities\/([^/]+)\/form$/.exec(url);
-      if (formMatch) {
-        const capabilityName = decodeURIComponent(formMatch[1] ?? '');
-        const cap = devtoolsRegistry.get(capabilityName);
-        if (!cap) {
-          res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: `Capability not found: ${capabilityName}` }));
+    if (method === 'GET' && capabilityUi?.matchesDevSessionPath(url)) {
+      const html = capabilityUi.devSessionHtml();
+      if (!html) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Dev session disabled' }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+      return;
+    }
+
+    if (method === 'POST' && capabilityUi?.matchesDevSessionPath(url)) {
+      try {
+        const raw = await readBody(req);
+        const parsed = parseDevSessionFormBody(
+          raw,
+          req.headers['content-type'] as string | undefined,
+        );
+        if ('error' in parsed) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: parsed.error }));
           return;
         }
-        const meta = buildCapabilityMeta(cap);
-        const html = renderCapabilityFormHtml(meta, {
-          actionUrl: `${httpApiBasePath}/capabilities/${encodeURIComponent(capabilityName)}`,
-          listUrl: '/capabilities',
-        });
+        redirectWithDevSessionCookies(
+          res,
+          capabilityUi.paths.uiBasePath,
+          parsed.userId,
+          parsed.permissions,
+        );
+      } catch (err) {
+        const status = (err as { status?: number }).status ?? 500;
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      }
+      return;
+    }
+
+    if (method === 'GET' && capabilityUi) {
+      const formName = capabilityUi.matchesFormPath(url);
+      if (formName) {
+        const html = capabilityUi.formHtml(formName);
+        if (!html) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: `Capability not found: ${formName}` }));
+          return;
+        }
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(html);
         return;

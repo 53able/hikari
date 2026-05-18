@@ -13,8 +13,10 @@ import {
   createSessionManager,
   createInMemoryApprovalStore,
   createApprovalApi,
+  backendFromOpenAi,
   type ChatBackend,
   type ChatStreamEvent,
+  type OpenAiAdapter,
 } from '../src/index.js';
 
 function makeReq(method: string, url: string, body = ''): IncomingMessage {
@@ -63,6 +65,27 @@ const ping = defineCapability({
   outputSchema: z.object({ pong: z.boolean() }),
   policy: { requiredPermissions: [], sideEffects: ['read'], auditLevel: 'basic' },
   handler: async () => ({ pong: true }),
+});
+
+describe('backendFromOpenAi', () => {
+  it('streams text_delta and done from adapter.chat', async () => {
+    const mockAdapter: OpenAiAdapter = {
+      getTools: () => [],
+      chat: async () => ({ content: 'hello from openai', traceIds: ['trace-openai'] }),
+    };
+    const backend = backendFromOpenAi(mockAdapter);
+    const events: ChatStreamEvent[] = [];
+    for await (const event of backend.stream('hi', [], {
+      userId: 'user-1',
+      permissions: [],
+    })) {
+      events.push(event);
+    }
+    expect(events).toEqual([
+      { type: 'text_delta', delta: 'hello from openai' },
+      { type: 'done', traceIds: ['trace-openai'] },
+    ]);
+  });
 });
 
 describe('createChatServer devtools routes', () => {
