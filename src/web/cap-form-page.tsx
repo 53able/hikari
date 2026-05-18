@@ -94,19 +94,48 @@ export type CapabilityFormPageOptions = {
   readonly actionUrl?: string;
   /** 戻るリンク先。 */
   readonly listUrl?: string;
+  /** 開発用 Cookie セッション設定ページ（ブラウザ向け権限）。 */
+  readonly devSessionUrl?: string;
 };
 
 interface CapabilityFormPageProps {
   readonly meta: CapabilityMeta;
   readonly actionUrl: string;
   readonly listUrl: string;
+  readonly devSessionUrl?: string;
   readonly fields: readonly CapFormField[];
 }
+
+const PolicyNotice = ({
+  meta,
+  devSessionUrl,
+}: {
+  meta: CapabilityMeta;
+  devSessionUrl?: string;
+}): HtmlNode | null => {
+  const perms = meta.policy.requiredPermissions;
+  if (perms.length === 0) {
+    return null;
+  }
+  return (
+    <p class="policy-notice">
+      Required permissions: <code>{perms.join(', ')}</code>. Browser forms use cookies unless
+      headers are sent.
+      {devSessionUrl ? (
+        <>
+          {' '}
+          <a href={devSessionUrl}>Set dev session cookies</a>
+        </>
+      ) : null}
+    </p>
+  );
+};
 
 const CapabilityFormPage = ({
   meta,
   actionUrl,
   listUrl,
+  devSessionUrl,
   fields,
 }: CapabilityFormPageProps): HtmlNode => (
   <html lang="ja">
@@ -128,6 +157,7 @@ const CapabilityFormPage = ({
     button { padding: 0.5rem 1rem; border-radius: 6px; border: none; background: #2563eb; color: #fff; cursor: pointer; font-weight: 600; }
     a { color: #7dd3fc; }
     .muted { color: #94a3b8; }
+    .policy-notice { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.9rem; line-height: 1.5; }
     code { color: #7dd3fc; }`,
         }}
       />
@@ -137,6 +167,7 @@ const CapabilityFormPage = ({
         <code>{meta.name}</code>
       </h1>
       <p class="meta">{meta.description}</p>
+      <PolicyNotice meta={meta} devSessionUrl={devSessionUrl} />
       <form method="post" action={actionUrl}>
         {fields.length > 0 ? (
           fields.map((field) => (
@@ -153,7 +184,7 @@ const CapabilityFormPage = ({
         </div>
       </form>
       <p class="muted">
-        POSTs JSON to the REST API. Complex nested fields: use valid JSON in textarea.
+        Submits to the REST API (urlencoded or JSON). With Accept: text/html, results render as an HTML page.
       </p>
     </body>
   </html>
@@ -174,6 +205,7 @@ export const renderCapabilityFormHtml = (
       meta={meta}
       actionUrl={actionUrl}
       listUrl={listUrl}
+      devSessionUrl={options.devSessionUrl}
       fields={fields}
     />
   );

@@ -14,6 +14,30 @@ const signJwt = (payload: object, secret: string): string => {
 };
 
 describe('auth resolvers', () => {
+  it('falls back to cookies when readCookies is enabled', () => {
+    const resolve = createHeaderExecutionOptionsResolver({ readCookies: true });
+    const options = resolve({
+      headers: {
+        cookie: 'hikari-user-id=dev; hikari-permissions=admin,purchase',
+      },
+    } as import('node:http').IncomingMessage);
+
+    expect(options.userId).toBe('dev');
+    expect(options.permissions).toEqual(['admin', 'purchase']);
+  });
+
+  it('prefers headers over cookies', () => {
+    const resolve = createHeaderExecutionOptionsResolver({ readCookies: true });
+    const options = resolve({
+      headers: {
+        'x-hikari-user-id': 'header-user',
+        cookie: 'hikari-user-id=cookie-user',
+      },
+    } as import('node:http').IncomingMessage);
+
+    expect(options.userId).toBe('header-user');
+  });
+
   it('resolves execution options from headers', () => {
     const resolve = createHeaderExecutionOptionsResolver();
     const options = resolve({

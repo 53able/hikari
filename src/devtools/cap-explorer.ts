@@ -2,6 +2,12 @@ import type { Registry } from '../core/registry.js';
 import { buildRegistryMeta, listApprovalRequired, type CapabilityMeta } from '../core/cap-meta.js';
 import { needsHumanApproval } from '../core/policy.js';
 
+/** `createCapabilityExplorer` のパス設定。 */
+export type CapabilityExplorerOptions = {
+  /** 一覧・フォーム GET のベースパス。デフォルト: `/capabilities`。 */
+  readonly uiBasePath?: string;
+};
+
 /** `createCapabilityExplorer` が返す読み取り専用ビュー。 */
 export type CapabilityExplorer = {
   readonly listMeta: () => CapabilityMeta[];
@@ -20,7 +26,11 @@ const escapeHtml = (value: string): string =>
 /**
  * レジストリ内のケイパビリティを人間・エージェント向けに一覧する devtools。
  */
-export const createCapabilityExplorer = (registry: Registry): CapabilityExplorer => {
+export const createCapabilityExplorer = (
+  registry: Registry,
+  options: CapabilityExplorerOptions = {},
+): CapabilityExplorer => {
+  const uiBasePath = (options.uiBasePath ?? '/capabilities').replace(/\/$/, '') || '/capabilities';
   const listMeta = () => buildRegistryMeta(registry);
 
   const formatText = (): string => {
@@ -46,7 +56,7 @@ export const createCapabilityExplorer = (registry: Registry): CapabilityExplorer
   <td>${escapeHtml(meta.policy.requiredPermissions.join(', ') || '—')}</td>
   <td>${staticApproval || meta.policy.requiresApprovalWhen ? 'yes' : 'no'}</td>
   <td>${escapeHtml(meta.policy.auditLevel)}</td>
-  <td><a href="/capabilities/${escapeHtml(meta.name)}/form">form</a></td>
+  <td><a href="${uiBasePath}/${escapeHtml(meta.name)}/form">form</a></td>
 </tr>`;
       })
       .join('\n');

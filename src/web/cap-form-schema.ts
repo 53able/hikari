@@ -57,3 +57,60 @@ export const fieldsFromInputSchema = (
  */
 export const fieldsFromCapabilityMeta = (meta: CapabilityMeta): CapFormField[] =>
   fieldsFromInputSchema(meta.inputSchema);
+
+/** HTML フォームボディのパース失敗。 */
+export class FormBodyParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FormBodyParseError';
+  }
+}
+
+/**
+ * `application/x-www-form-urlencoded` をケイパビリティ入力オブジェクトに変換する。
+ */
+export const formUrlEncodedToCapabilityInput = (
+  fields: readonly CapFormField[],
+  params: URLSearchParams,
+): Record<string, unknown> => {
+  const input: Record<string, unknown> = {};
+  fields.forEach((field) => {
+    const raw = params.get(field.name);
+    if (raw === null) {
+      if (field.type === 'boolean') {
+        input[field.name] = false;
+      }
+      return;
+    }
+    if (field.type === 'boolean') {
+      input[field.name] = raw === 'true' || raw === 'on';
+      return;
+    }
+    if (field.type === 'integer') {
+      const parsed = Number.parseInt(raw, 10);
+      if (Number.isNaN(parsed)) {
+        throw new FormBodyParseError(`Invalid integer for field "${field.name}"`);
+      }
+      input[field.name] = parsed;
+      return;
+    }
+    if (field.type === 'number') {
+      const parsed = Number.parseFloat(raw);
+      if (Number.isNaN(parsed)) {
+        throw new FormBodyParseError(`Invalid number for field "${field.name}"`);
+      }
+      input[field.name] = parsed;
+      return;
+    }
+    if (field.type === 'array' || field.type === 'object') {
+      try {
+        input[field.name] = JSON.parse(raw) as unknown;
+      } catch {
+        throw new FormBodyParseError(`Invalid JSON for field "${field.name}"`);
+      }
+      return;
+    }
+    input[field.name] = raw;
+  });
+  return input;
+};
