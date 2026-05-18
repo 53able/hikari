@@ -99,6 +99,32 @@ export const partitionTraceEvents = (
   return { harness, capability };
 };
 
+/** `plan_recorded` の metadata から構造化プランステップを取り出す。 */
+export const parsePlanStepsFromMetadata = (
+  entry: AuditEntry,
+): readonly { capabilityName: string; order: number; toolCallId?: string }[] => {
+  const raw = entry.metadata?.planSteps;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((step) => {
+    if (!step || typeof step !== 'object') return [];
+    const record = step as Record<string, unknown>;
+    if (typeof record.capabilityName !== 'string' || typeof record.order !== 'number') {
+      return [];
+    }
+    return [
+      {
+        capabilityName: record.capabilityName,
+        order: record.order,
+        ...(typeof record.toolCallId === 'string' ? { toolCallId: record.toolCallId } : {}),
+      },
+    ];
+  });
+};
+
+/** harness と capability イベントを時系列でマージする（Pi 相関タイムライン用）。 */
+export const mergeTraceTimeline = (events: readonly AuditEntry[]): AuditEntry[] =>
+  [...events].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+
 function groupByTrace(entries: AuditEntry[]): Map<string, AuditEntry[]> {
   const map = new Map<string, AuditEntry[]>();
   for (const entry of entries) {

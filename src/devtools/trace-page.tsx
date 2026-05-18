@@ -4,7 +4,11 @@ import { TamaguiProvider, YStack, XStack, Text } from 'tamagui';
 import config from '../web/tamagui.config.js';
 import type { AuditEntry } from '../core/audit.js';
 import type { TraceSpan, TraceStatus } from './trace-viewer.js';
-import { partitionTraceEvents } from './trace-viewer.js';
+import {
+  mergeTraceTimeline,
+  parsePlanStepsFromMetadata,
+  partitionTraceEvents,
+} from './trace-viewer.js';
 
 const STATUS_COLOR: Record<TraceStatus, string> = {
   succeeded: '#22c55e',
@@ -24,23 +28,46 @@ const TRACE_TABLE_CSS = `*{box-sizing:border-box}
 .trace-nested td{padding:4px;vertical-align:top}
 .trace-pre{margin:0;white-space:pre-wrap;font-size:11px}`;
 
+const PlanStepsRow = ({ entry }: { entry: AuditEntry }): React.ReactElement | null => {
+  const steps = parsePlanStepsFromMetadata(entry);
+  if (steps.length === 0) return null;
+  return (
+    <tr>
+      <td colSpan={4} style={{ padding: '4px 8px 8px', fontSize: 12, color: '#4338ca' }}>
+        <strong>Plan steps:</strong>
+        <ol style={{ margin: '4px 0 0 16px', padding: 0 }}>
+          {steps.map((step) => (
+            <li key={`${step.order}-${step.capabilityName}`}>
+              {step.capabilityName}
+              {step.toolCallId ? ` (${step.toolCallId})` : ''}
+            </li>
+          ))}
+        </ol>
+      </td>
+    </tr>
+  );
+};
+
 const EventRows = ({ events }: { events: readonly AuditEntry[] }): React.ReactElement => (
   <>
     {events.map((e, idx) => (
-      <tr key={`${e.type}-${idx}`}>
-        <td>{e.type}</td>
-        <td>{e.timestamp.toISOString().slice(11, 23)}</td>
-        <td>
-          <pre className="trace-pre">
-            {e.input !== undefined ? JSON.stringify(e.input, null, 2) : ''}
-          </pre>
-        </td>
-        <td>
-          <pre className="trace-pre">
-            {e.output !== undefined ? JSON.stringify(e.output, null, 2).slice(0, 400) : ''}
-          </pre>
-        </td>
-      </tr>
+      <React.Fragment key={`${e.type}-${idx}`}>
+        <tr>
+          <td>{e.type}</td>
+          <td>{e.timestamp.toISOString().slice(11, 23)}</td>
+          <td>
+            <pre className="trace-pre">
+              {e.input !== undefined ? JSON.stringify(e.input, null, 2) : ''}
+            </pre>
+          </td>
+          <td>
+            <pre className="trace-pre">
+              {e.output !== undefined ? JSON.stringify(e.output, null, 2).slice(0, 400) : ''}
+            </pre>
+          </td>
+        </tr>
+        {e.type === 'plan_recorded' ? <PlanStepsRow entry={e} /> : null}
+      </React.Fragment>
     ))}
   </>
 );
@@ -88,6 +115,7 @@ const EventSection = ({
 
 const SpanRow = ({ span }: { span: TraceSpan }): React.ReactElement => {
   const { harness, capability } = partitionTraceEvents(span.events);
+  const timeline = mergeTraceTimeline(span.events);
   const hasHarness = harness.length > 0;
   const displayName =
     span.capabilityName === '_harness' && capability.length > 0
@@ -151,6 +179,11 @@ const SpanRow = ({ span }: { span: TraceSpan }): React.ReactElement => {
                   title="Capability execution"
                   events={capability}
                   accent="#0f766e"
+                />
+                <EventSection
+                  title="Merged timeline (harness + execution + approval)"
+                  events={timeline}
+                  accent="#334155"
                 />
               </tbody>
             </table>
