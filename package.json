@@ -46,6 +46,22 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./redis": {
+      "import": "./dist/redis.js",
+      "types": "./dist/redis.d.ts"
+    },
+    "./file": {
+      "import": "./dist/file.js",
+      "types": "./dist/file.d.ts"
+    },
+    "./hono": {
+      "import": "./dist/hono.js",
+      "types": "./dist/hono.d.ts"
+    },
+    "./pi": {
+      "import": "./dist/pi.js",
+      "types": "./dist/pi.d.ts"
     }
   },
   "bin": {

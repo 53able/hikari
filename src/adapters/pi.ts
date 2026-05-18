@@ -113,15 +113,6 @@ export function toAgentTools(
         const intent =
           bindings.resolveIntent?.(toolCallId, cap.name, params) ?? ctx.intent ?? toolCallId;
 
-        await bindings.harness?.recordToolSelected({
-          traceId,
-          userId: ctx.userId,
-          sessionId: ctx.sessionId,
-          capabilityName: cap.name,
-          toolInput: params,
-          intent,
-        });
-
         try {
           const result = await engine.execute(cap.name, params, {
             userId: ctx.userId,

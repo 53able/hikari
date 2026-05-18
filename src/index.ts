@@ -3,42 +3,8 @@ export { createClaudeAdapter } from './adapters/claude.js';
 export type { ClaudeAdapter, ChatOptions, ChatResult } from './adapters/claude.js';
 export { createOpenAiAdapter } from './adapters/openai.js';
 export type { OpenAiAdapter, OpenAiChatMessage } from './adapters/openai.js';
-export {
-  createHikariAgent,
-  createHikariAgentWithOptions,
-  toAgentTools,
-  chatHistoryToAgentMessages,
-  intentSnippetFromMessage,
-  traceIdFromPiToolResult,
-} from './adapters/pi.js';
-export type {
-  HikariAgent,
-  HikariAgentOptions,
-  PiToolBindings,
-  PiToolExecutionContext,
-  PiToolResultDetails,
-} from './adapters/pi.js';
-export type { PiChatBackendDeps } from './web/chat-server.js';
 export { createHttpAdapter } from './adapters/http.js';
 export type { HttpAdapter, HttpAdapterOptions, CapabilityMeta } from './adapters/http.js';
-export {
-  createHikariHttpMiddleware,
-  createHikariExecutionOptionsMiddleware,
-  mountHikariHttpAdapter,
-  mountHikariCapabilityUi,
-  mountHikariTraceViewer,
-  mountHikariApprovals,
-  mountHikariChat,
-} from './adapters/hono.js';
-export type {
-  MountHikariHttpAdapterOptions,
-  MountHikariCapabilityUiOptions,
-  MountHikariTraceViewerOptions,
-  MountHikariApprovalsOptions,
-  MountHikariChatOptions,
-  HikariHonoEnv,
-  HikariHonoVariables,
-} from './adapters/hono.js';
 export { parseCookieHeader } from './web/auth.js';
 export {
   HIKARI_USER_ID_COOKIE,
@@ -120,13 +86,6 @@ export {
   createApprovalStore,
   createApprovalApi,
 } from './core/approval-store.js';
-export { createFileApprovalStore } from './core/approval-file-store.js';
-export type { FileApprovalStore, FileApprovalStoreOptions } from './core/approval-file-store.js';
-export {
-  createApprovalFileLogger,
-  wrapApprovalApiWithFileLog,
-} from './core/approval-file.js';
-export type { ApprovalFileEvent, ApprovalFileLogger } from './core/approval-file.js';
 export type {
   ApprovalStore,
   InMemoryApprovalStore,
@@ -167,24 +126,8 @@ export type {
   RateLimitContext,
   RateLimitResult,
 } from './core/rate-limit.js';
-export {
-  connectHikariRedis,
-  createHikariRedisClient,
-  resolveRedisUrl,
-} from './core/redis-client.js';
-export type { HikariRedis, ConnectHikariRedisOptions } from './core/redis-client.js';
-export { createRedisIdempotencyStore } from './core/redis-idempotency.js';
-export type { RedisIdempotencyStoreOptions } from './core/redis-idempotency.js';
-export { createRedisApprovalStore } from './core/redis-approval.js';
-export type { RedisApprovalStoreOptions } from './core/redis-approval.js';
-export {
-  createRedisSlidingWindowRateLimiter,
-  createRedisRateLimitGuard,
-} from './core/redis-rate-limit.js';
-export { createDefaultRedisRateLimitGuard, createServeRateLimitGuard } from './core/redis-serve.js';
 export { createQueuedApprovalNotifier } from './core/approval-webhook-queue.js';
 export type { QueuedApprovalNotifierOptions } from './core/approval-webhook-queue.js';
-export { createJsonlAuditStorage } from './core/audit-file.js';
 export type {
   JwtExecutionPayload,
   HeaderAuthResolverOptions,

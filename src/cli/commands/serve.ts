@@ -38,26 +38,30 @@ export const serveCommand: CliCommand = async (ctx, args) => {
     const {
       createAuditLog,
       createInMemoryStorage,
-      createJsonlAuditStorage,
       createEngine,
       devAutoApprove,
       createHarnessTracer,
       createInMemoryApprovalStore,
-      createFileApprovalStore,
       createApprovalApi,
-      createApprovalFileLogger,
-      wrapApprovalApiWithFileLog,
       createInMemoryIdempotencyStore,
-      createFileIdempotencyStore,
-      createServeRateLimitGuard,
       approvalNotifiersFromEnv,
       composeApprovalNotifiers,
       createQueuedApprovalNotifier,
+    } = await import('../../core/index.js');
+    const {
+      createJsonlAuditStorage,
+      createFileApprovalStore,
+      createApprovalFileLogger,
+      wrapApprovalApiWithFileLog,
+      createFileIdempotencyStore,
+    } = await import('../../file.js');
+    const {
       connectHikariRedis,
       resolveRedisUrl,
       createRedisIdempotencyStore,
       createRedisApprovalStore,
-    } = await import('../../core/index.js');
+      createServeRateLimitGuard,
+    } = await import('../../redis.js');
     const { createChatServer } = await import('../../web/chat-server.js');
     const { resolveServeChatBackend } = await import('../../adapters/llm-provider.js');
     const { createSessionManager } = await import('../../agent/session.js');
@@ -141,12 +145,12 @@ export const serveCommand: CliCommand = async (ctx, args) => {
       auditLog,
       approvalGate,
       idempotencyStore,
+      harness,
     });
 
     const { backend, provider: llmProvider } = resolveServeChatBackend({
       registry,
       engine,
-      harness,
       onRegisterApprovalNotifier: (traceId, notify) => {
         approvalNotifiers.set(traceId, notify);
         return () => approvalNotifiers.delete(traceId);

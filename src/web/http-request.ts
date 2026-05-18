@@ -1,10 +1,8 @@
-import type { IncomingMessage } from 'node:http';
-
 /**
  * クライアントが HTML レスポンスを期待しているか（`Accept: text/html` 等）。
  */
-export const wantsHtmlResponse = (req: IncomingMessage): boolean => {
-  const accept = req.headers.accept ?? '';
+export const wantsHtmlResponse = (req: Request): boolean => {
+  const accept = req.headers.get('accept') ?? '';
   return accept.includes('text/html');
 };
 

@@ -6,10 +6,10 @@ import {
   createEngine,
   devAutoApprove,
   createHarnessTracer,
-  createHikariAgent,
   intentSnippetFromMessage,
   buildHarnessPlan,
 } from '../../src/index.js';
+import { createHikariAgent } from '../../src/pi.js';
 import { listBooks, getBook, purchaseBook, addBook, deleteBook } from './capabilities.js';
 
 const registry = createRegistry()

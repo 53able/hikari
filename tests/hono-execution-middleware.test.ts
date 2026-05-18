@@ -7,11 +7,13 @@ import { getRequestListener } from '@hono/node-server';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
-  createHikariExecutionOptionsMiddleware,
   createHeaderExecutionOptionsResolver,
   normalizeExecutionOptions,
-  type HikariHonoEnv,
 } from '../src/index.js';
+import {
+  createHikariExecutionOptionsMiddleware,
+  type HikariHonoEnv,
+} from '../src/hono.js';
 
 describe('createHikariExecutionOptionsMiddleware', () => {
   it('sets userId and permissions on context', async () => {

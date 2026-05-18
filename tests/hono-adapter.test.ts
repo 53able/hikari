@@ -16,8 +16,8 @@ import {
   autoApprove,
   createHttpAdapter,
   createHeaderExecutionOptionsResolver,
-  mountHikariHttpAdapter,
 } from '../src/index.js';
+import { mountHikariHttpAdapter } from '../src/hono.js';
 
 const pingCap = defineCapability({
   name: 'ping',

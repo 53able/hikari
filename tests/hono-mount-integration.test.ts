@@ -16,9 +16,8 @@ import {
   autoApprove,
   createHttpAdapter,
   createHeaderExecutionOptionsResolver,
-  mountHikariHttpAdapter,
-  mountHikariCapabilityUi,
 } from '../src/index.js';
+import { mountHikariHttpAdapter, mountHikariCapabilityUi } from '../src/hono.js';
 
 const echo = defineCapability({
   name: 'echo',

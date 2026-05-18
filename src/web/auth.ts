@@ -1,5 +1,4 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { IncomingMessage } from 'node:http';
 import { z } from 'zod';
 import {
   normalizeExecutionOptions,
@@ -36,7 +35,7 @@ export const executionOptionsFromJwtPayload = (
 
 /** `Cookie` ヘッダー文字列をキー・値マップにパースする。 */
 export const parseCookieHeader = (
-  cookieHeader: string | undefined,
+  cookieHeader: string | null | undefined,
 ): Readonly<Record<string, string>> => {
   if (!cookieHeader) {
     return {};
@@ -84,12 +83,12 @@ export type HeaderAuthResolverOptions = {
 };
 
 /**
- * 開発用: HTTP ヘッダーから `ExecutionOptions` を組み立てる。
+ * HTTP ヘッダーから `ExecutionOptions` を組み立てる。
  * 本番では JWT 等の署名付きトークン検証に置き換えること。
  */
 export const createHeaderExecutionOptionsResolver = (
   options: HeaderAuthResolverOptions = {},
-): ((req: IncomingMessage) => NormalizedExecutionOptions) => {
+): ((req: Request) => NormalizedExecutionOptions) => {
   const userIdHeader = options.userIdHeader ?? 'x-hikari-user-id';
   const permissionsHeader = options.permissionsHeader ?? 'x-hikari-permissions';
   const sessionIdHeader = options.sessionIdHeader ?? 'x-hikari-session-id';
@@ -99,18 +98,17 @@ export const createHeaderExecutionOptionsResolver = (
 
   return (req) => {
     const cookies = options.readCookies
-      ? parseCookieHeader(req.headers.cookie)
+      ? parseCookieHeader(req.headers.get('cookie'))
       : {};
     const userId =
-      (req.headers[userIdHeader] as string | undefined) ??
+      req.headers.get(userIdHeader) ??
       cookies[userIdCookie] ??
       'anonymous';
     const permissionsRaw =
-      (req.headers[permissionsHeader] as string | undefined) ??
-      cookies[permissionsCookie];
-    const permissions = permissionsFromRaw(permissionsRaw);
-    const sessionId = req.headers[sessionIdHeader] as string | undefined;
-    const traceId = req.headers[traceIdHeader] as string | undefined;
+      req.headers.get(permissionsHeader) ?? cookies[permissionsCookie] ?? undefined;
+    const permissions = permissionsFromRaw(permissionsRaw ?? undefined);
+    const sessionId = req.headers.get(sessionIdHeader) ?? undefined;
+    const traceId = req.headers.get(traceIdHeader) ?? undefined;
     return normalizeExecutionOptions({ userId, permissions, sessionId, traceId });
   };
 };
@@ -165,13 +163,13 @@ export type HmacJwtAuthResolverOptions = {
  */
 export const createHmacJwtExecutionOptionsResolver = (
   options: HmacJwtAuthResolverOptions = {},
-): ((req: IncomingMessage) => NormalizedExecutionOptions) => {
+): ((req: Request) => NormalizedExecutionOptions) => {
   const secret = options.secret ?? process.env.HIKARI_JWT_SECRET;
   const bearerPrefix = options.bearerPrefix ?? 'Bearer ';
   const headerFallback = createHeaderExecutionOptionsResolver(options.headerFallback);
 
   return (req) => {
-    const auth = req.headers.authorization;
+    const auth = req.headers.get('authorization');
     if (secret && auth?.startsWith(bearerPrefix)) {
       const token = auth.slice(bearerPrefix.length).trim();
       const payload = verifyHmacJwt(token, secret);

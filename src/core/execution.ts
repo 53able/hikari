@@ -6,6 +6,8 @@ import { evaluatePolicy, needsHumanApproval, describeRisk, PolicyViolationError 
 import type { ApprovalGate } from './approval.js';
 import { ApprovalDeniedError } from './approval.js';
 import type { Registry } from './registry.js';
+import type { HarnessTracer } from './harness-trace.js';
+import { buildHarnessPlan } from './harness-plan.js';
 import { scrubAuditPayload } from './audit-scrub.js';
 import type { IdempotencyStore } from './idempotency-store.js';
 import {
@@ -113,6 +115,8 @@ type EngineConfig = {
   auditLog: AuditLogger;
   approvalGate?: ApprovalGate;
   idempotencyStore?: IdempotencyStore;
+  /** 指定時は `execute` 内で intent / plan / tool 選択を harness 監査イベントとして記録する。 */
+  harness?: HarnessTracer;
 };
 
 /**
@@ -149,11 +153,38 @@ export function createEngine(config: EngineConfig): Engine {
   };
 }
 
+const recordHarnessForExecute = async (
+  harness: HarnessTracer,
+  registry: Registry,
+  capabilityName: string,
+  context: ExecutionContext,
+  toolInput: unknown,
+): Promise<void> => {
+  const base = {
+    traceId: context.traceId,
+    userId: context.userId,
+    sessionId: context.sessionId,
+    intent: context.intent,
+  };
+  if (context.intent) {
+    await harness.recordIntent(base);
+  }
+  await harness.recordPlan({
+    ...base,
+    plan: buildHarnessPlan(registry),
+  });
+  await harness.recordToolSelected({
+    ...base,
+    capabilityName,
+    toolInput,
+  });
+};
+
 async function runCapability<T>(
   capabilityName: string,
   input: unknown,
   options: ExecutionOptions,
-  { registry, auditLog, approvalGate, idempotencyStore }: EngineConfig,
+  { registry, auditLog, approvalGate, idempotencyStore, harness }: EngineConfig,
 ): Promise<ExecutionResult<T>> {
   const capability = registry.get(capabilityName);
   if (!capability) throw new CapabilityNotFoundError(capabilityName);
@@ -201,6 +232,16 @@ async function runCapability<T>(
       });
     }
     throw err;
+  }
+
+  if (harness) {
+    await recordHarnessForExecute(
+      harness,
+      registry,
+      capabilityName,
+      context,
+      parseResult.data,
+    );
   }
 
   // Approval gate for high-risk operations

@@ -89,16 +89,15 @@ describe('createHttpAdapter form POST', () => {
   });
 
   it('POST application/x-www-form-urlencoded executes capability', async () => {
-    const req = makeReq(
-      'POST',
-      '/capabilities/submit_form',
-      'title=Book&quantity=3&notify=true',
-      'application/x-www-form-urlencoded',
+    const response = await adapter.fetch(
+      new Request('http://localhost/capabilities/submit_form', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'title=Book&quantity=3&notify=true',
+      }),
     );
-    const { res, status, body } = makeRes();
-    await adapter.handler(req, res);
-    expect(status()).toBe(200);
-    const json = JSON.parse(body()) as { output: { ok: boolean; title: string } };
+    expect(response!.status).toBe(200);
+    const json = (await response!.json()) as { output: { ok: boolean; title: string } };
     expect(json.output.ok).toBe(true);
     expect(json.output.title).toBe('Book');
   });

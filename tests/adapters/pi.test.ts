@@ -8,9 +8,8 @@ import {
   createHarnessTracer,
   defineCapability,
   devAutoApprove,
-  toAgentTools,
-  traceIdFromPiToolResult,
 } from '../../src/index.js';
+import { toAgentTools, traceIdFromPiToolResult } from '../../src/pi.js';
 import type { Engine, ExecutionResult } from '../../src/core/execution.js';
 
 const echo = defineCapability({
@@ -35,8 +34,8 @@ describe('toAgentTools', () => {
     const registry = createRegistry().register(echo);
     const storage = createInMemoryStorage();
     const auditLog = createAuditLog(storage);
-    const engine = createEngine({ registry, auditLog, approvalGate: devAutoApprove });
     const { harness } = makeHarness();
+    const engine = createEngine({ registry, auditLog, approvalGate: devAutoApprove, harness });
 
     const contextRef = {
       current: {
@@ -53,7 +52,6 @@ describe('toAgentTools', () => {
 
     const tools = toAgentTools(registry, engine, {
       getContext: () => contextRef.current,
-      harness,
     });
 
     expect(tools).toHaveLength(1);
