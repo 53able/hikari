@@ -18,6 +18,18 @@
   "engines": {
     "node": ">=20.0.0"
   },
+  "peerDependencies": {
+    "hono": ">=4.0.0",
+    "@hono/node-server": ">=1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "hono": {
+      "optional": true
+    },
+    "@hono/node-server": {
+      "optional": true
+    }
+  },
   "keywords": [
     "ai",
     "llm",
@@ -56,6 +68,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
+    "openai": "^6.26.0",
     "@earendil-works/pi-agent-core": "^0.74.0",
     "@earendil-works/pi-ai": "^0.74.0",
     "react": "^19.2.6",
@@ -68,6 +81,8 @@
     "zod-to-json-schema": "^3.23.5"
   },
   "devDependencies": {
+    "@hono/node-server": "^1.14.3",
+    "@hono/zod-validator": "^0.4.3",
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/commit-analyzer": "^13.0.1",
     "@semantic-release/git": "^10.0.1",
@@ -79,6 +94,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/react-native": "^0.72.8",
     "conventional-changelog-conventionalcommits": "^8.0.0",
+    "hono": "^4.7.11",
     "semantic-release": "^24.2.3",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
