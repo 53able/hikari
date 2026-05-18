@@ -1,3 +1,10 @@
+# [0.3.0](https://github.com/53able/hikari/compare/v0.2.1...v0.3.0) (2026-05-18)
+
+
+### Features
+
+* Hono integration, capability UI, and hikari serve auth parity ([#12](https://github.com/53able/hikari/issues/12)) ([cf3396f](https://github.com/53able/hikari/commit/cf3396f696f349566fdb29f8247dea582fb9be6c))
+
 ## [0.2.1](https://github.com/53able/hikari/compare/v0.2.0...v0.2.1) (2026-05-17)
 
 
