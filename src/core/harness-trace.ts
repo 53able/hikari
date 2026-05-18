@@ -48,6 +48,7 @@ const baseContext = (input: HarnessRecordInput): ExecutionContext => ({
   traceId: input.traceId,
   intent: input.intent,
   permissions: new Set(),
+  runtime: {},
 });
 
 const resolveHarnessAuditLevel = (

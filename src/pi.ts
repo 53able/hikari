@@ -1,6 +1,7 @@
 export {
   createHikariAgent,
   createHikariAgentWithOptions,
+  createHikariHarness,
   toAgentTools,
   chatHistoryToAgentMessages,
   intentSnippetFromMessage,
@@ -9,6 +10,8 @@ export {
 export type {
   HikariAgent,
   HikariAgentOptions,
+  HikariHarness,
+  HikariHarnessDeps,
   PiToolBindings,
   PiToolExecutionContext,
   PiToolResultDetails,

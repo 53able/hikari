@@ -57,8 +57,17 @@ export type { ChatUiOptions } from './web/chat-ui.js';
 export { createTraceViewer, isHarnessAuditEntry, partitionTraceEvents } from './devtools/trace-viewer.js';
 export type { TraceViewer, TraceSpan, TraceStatus, FormatOptions } from './devtools/trace-viewer.js';
 export { createHarnessTracer } from './core/harness-trace.js';
-export { buildHarnessPlan } from './core/harness-plan.js';
-export type { HarnessPlanOptions } from './core/harness-plan.js';
+export {
+  buildHarnessPlan,
+  buildHarnessPlanFromToolCalls,
+  harnessPlanStepsMetadata,
+} from './core/harness-plan.js';
+export type { HarnessPlanOptions, HarnessPlanStep } from './core/harness-plan.js';
+export type { HarnessMode } from './core/execution.js';
+export type { CapabilityRuntime } from './core/capability.js';
+export { resolveEffectivePolicy } from './core/policy.js';
+export type { EffectivePolicy } from './core/policy.js';
+export { parsePlanStepsFromMetadata, mergeTraceTimeline } from './devtools/trace-viewer.js';
 export type { AuditLevel } from './core/audit-scrub.js';
 export { scrubAuditPayload } from './core/audit-scrub.js';
 export type { HarnessTracerOptions } from './core/harness-trace.js';

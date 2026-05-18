@@ -33,14 +33,12 @@ export const serveCommand: CliCommand = async (ctx, args) => {
   const useAnyRedis = useIdempotencyRedis || useApprovalRedis || useRateLimitRedis || rateLimitRedisFromEnv;
 
   try {
-    const { registry } = await loadRegistryFrom(entry);
+    const { registry, runtime } = await loadRegistryFrom(entry);
 
     const {
       createAuditLog,
       createInMemoryStorage,
-      createEngine,
       devAutoApprove,
-      createHarnessTracer,
       createInMemoryApprovalStore,
       createApprovalApi,
       createInMemoryIdempotencyStore,
@@ -64,6 +62,7 @@ export const serveCommand: CliCommand = async (ctx, args) => {
     } = await import('../../redis.js');
     const { createChatServer } = await import('../../web/chat-server.js');
     const { resolveServeChatBackend } = await import('../../adapters/llm-provider.js');
+    const { createHikariHarness } = await import('../../adapters/pi.js');
     const { createSessionManager } = await import('../../agent/session.js');
     const { createHeaderExecutionOptionsResolver } = await import('../../web/auth.js');
 
@@ -95,7 +94,6 @@ export const serveCommand: CliCommand = async (ctx, args) => {
       useRateLimitRedis || rateLimitRedisFromEnv,
     );
 
-    const harness = createHarnessTracer(auditLog, { registry, auditLevel: 'basic' });
     const sessionMgr = createSessionManager();
 
     const isProduction = process.env.NODE_ENV === 'production';
@@ -140,17 +138,19 @@ export const serveCommand: CliCommand = async (ctx, args) => {
       ? approvalStore.createGate({ onPending })
       : devAutoApprove;
 
-    const engine = createEngine({
+    const hikariHarness = createHikariHarness({
       registry,
       auditLog,
       approvalGate,
       idempotencyStore,
-      harness,
+      runtime,
     });
+    const engine = hikariHarness.engine;
 
     const { backend, provider: llmProvider } = resolveServeChatBackend({
       registry,
       engine,
+      harnessApi: hikariHarness,
       onRegisterApprovalNotifier: (traceId, notify) => {
         approvalNotifiers.set(traceId, notify);
         return () => approvalNotifiers.delete(traceId);

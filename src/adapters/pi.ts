@@ -1,10 +1,21 @@
+import { randomUUID } from 'node:crypto';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { Agent, type AgentTool, type AgentOptions, type AgentMessage } from '@earendil-works/pi-agent-core';
 import { streamSimple, getModel, type Model, type Usage } from '@earendil-works/pi-ai';
 import type { TSchema } from 'typebox';
 import type { Registry } from '../core/registry.js';
+import type { CapabilityRuntime } from '../core/capability.js';
 import type { Engine, ExecutionOptions } from '../core/execution.js';
-import type { HarnessTracer } from '../core/harness-trace.js';
+import { createEngine } from '../core/execution.js';
+import type { AuditLogger } from '../core/audit.js';
+import type { ApprovalGate } from '../core/approval.js';
+import type { IdempotencyStore } from '../core/idempotency-store.js';
+import { createHarnessTracer, type HarnessTracer } from '../core/harness-trace.js';
+import {
+  buildHarnessPlanFromToolCalls,
+  harnessPlanStepsMetadata,
+  type HarnessPlanStep,
+} from '../core/harness-plan.js';
 
 /** `createHikariAgent` の設定オプション。 */
 export interface HikariAgentOptions {
@@ -200,4 +211,114 @@ export const traceIdFromPiToolResult = (result: unknown): string | undefined => 
   if (details?.traceId && typeof details.traceId === 'string') return details.traceId;
   const direct = (result as PiToolResultDetails).traceId;
   return typeof direct === 'string' ? direct : undefined;
+};
+
+/** `createHikariHarness` の依存関係。 */
+export type HikariHarnessDeps = {
+  readonly registry: Registry;
+  readonly auditLog: AuditLogger;
+  readonly approvalGate?: ApprovalGate;
+  readonly idempotencyStore?: IdempotencyStore;
+  readonly runtime?: CapabilityRuntime;
+  readonly agentOptions?: HikariAgentOptions;
+  /** `buildHarnessPlanFromToolCalls` のプラン文プレフィックス。 */
+  readonly planPrefix?: string;
+};
+
+/** Pi harness + Hikari engine を束ねた実行面。 */
+export type HikariHarness = {
+  readonly agent: HikariAgent;
+  readonly harness: HarnessTracer;
+  readonly engine: Engine;
+  readonly runTurn: (input: {
+    readonly message: string;
+    readonly context: PiToolExecutionContext;
+  }) => Promise<{ readonly traceId: string }>;
+};
+
+type PiAgentEvent = {
+  readonly type: string;
+  readonly toolName?: string;
+  readonly toolCallId?: string;
+};
+
+/**
+ * Pi Agent と Hikari engine を統合する harness 層。
+ * intent / plan はターン単位で 1 回ずつ記録し、tool 選択は engine（`tool-only`）側で記録する。
+ */
+export const createHikariHarness = (deps: HikariHarnessDeps): HikariHarness => {
+  const harness = createHarnessTracer(deps.auditLog, { registry: deps.registry });
+  const engine = createEngine({
+    registry: deps.registry,
+    auditLog: deps.auditLog,
+    approvalGate: deps.approvalGate,
+    idempotencyStore: deps.idempotencyStore,
+    runtime: deps.runtime,
+    harness,
+    harnessMode: 'tool-only',
+  });
+
+  const contextRef: { current: PiToolExecutionContext } = {
+    current: { userId: 'anonymous' },
+  };
+  const planStepsRef: { steps: HarnessPlanStep[]; order: number } = {
+    steps: [],
+    order: 0,
+  };
+
+  const agent = createHikariAgent(deps.registry, engine, () => contextRef.current, {
+    ...deps.agentOptions,
+    harness: undefined,
+  });
+
+  agent.subscribe((event) => {
+    const agentEvent = event as PiAgentEvent;
+    if (agentEvent.type !== 'tool_execution_start' || !agentEvent.toolName) return;
+    planStepsRef.steps.push({
+      capabilityName: agentEvent.toolName,
+      order: planStepsRef.order,
+      ...(agentEvent.toolCallId !== undefined ? { toolCallId: agentEvent.toolCallId } : {}),
+    });
+    planStepsRef.order += 1;
+  });
+
+  const runTurn = async (input: {
+    message: string;
+    context: PiToolExecutionContext;
+  }): Promise<{ traceId: string }> => {
+    const traceId = input.context.traceId ?? randomUUID();
+    const intent = input.context.intent ?? intentSnippetFromMessage(input.message);
+    planStepsRef.steps = [];
+    planStepsRef.order = 0;
+    contextRef.current = {
+      ...input.context,
+      traceId,
+      intent,
+    };
+
+    await harness.recordIntent({
+      traceId,
+      userId: input.context.userId,
+      sessionId: input.context.sessionId,
+      intent,
+    });
+
+    agent.reset();
+    await agent.prompt(input.message);
+    await agent.waitForIdle();
+
+    const steps = [...planStepsRef.steps];
+    await harness.recordPlan({
+      traceId,
+      userId: input.context.userId,
+      sessionId: input.context.sessionId,
+      intent,
+      plan: buildHarnessPlanFromToolCalls(steps, { prefix: deps.planPrefix }),
+      metadata: harnessPlanStepsMetadata(steps),
+    });
+
+    return { traceId };
+  };
+
+  return { agent, harness, engine, runTurn };
 };

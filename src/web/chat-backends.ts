@@ -7,7 +7,13 @@ import {
   intentSnippetFromMessage,
   traceIdFromPiToolResult,
   type HikariAgentOptions,
+  type HikariHarness,
 } from '../adapters/pi.js';
+import {
+  buildHarnessPlanFromToolCalls,
+  harnessPlanStepsMetadata,
+  type HarnessPlanStep,
+} from '../core/harness-plan.js';
 import type { Engine } from '../core/execution.js';
 import type { Registry } from '../core/registry.js';
 import type { ExecutionOptions } from '../core/execution.js';
@@ -91,6 +97,11 @@ export const backendFromOpenAi = (adapter: OpenAiAdapter): ChatBackend => ({
 export interface PiChatBackendDeps {
   registry: Registry;
   engine: Engine;
+  /**
+   * `createHikariHarness` の戻り値。指定時は intent / plan をチャットターン単位で記録し、
+   * engine は `tool-only` harness モードで動作する。
+   */
+  harnessApi?: HikariHarness;
   agentOptions?: HikariAgentOptions;
   /**
    * ストリーム単位で承認待ち通知を登録する。
@@ -120,12 +131,26 @@ export const backendFromPiAgent = (deps: PiChatBackendDeps): ChatBackend => ({
         permissions: options.permissions,
       };
 
+      const harness = deps.harnessApi?.harness;
+      const engine = deps.harnessApi?.engine ?? deps.engine;
+      const planSteps: HarnessPlanStep[] = [];
+      let planStepOrder = 0;
+
+      if (harness) {
+        await harness.recordIntent({
+          traceId,
+          userId: options.userId,
+          sessionId: options.sessionId,
+          intent,
+        });
+      }
+
       const contextRef = { current: executionContext };
       const agent = createHikariAgent(
         deps.registry,
-        deps.engine,
+        engine,
         () => contextRef.current,
-        deps.agentOptions,
+        { ...deps.agentOptions, harness: undefined },
       );
 
       agent.state.messages = chatHistoryToAgentMessages(history, agent.state.model);
@@ -161,6 +186,16 @@ export const backendFromPiAgent = (deps: PiChatBackendDeps): ChatBackend => ({
             queue.push({ type: 'text_delta', delta: ae.delta });
           }
         } else if (agentEvent.type === 'tool_execution_start') {
+          if (agentEvent.toolName) {
+            planSteps.push({
+              capabilityName: agentEvent.toolName,
+              order: planStepOrder,
+              ...((agentEvent as { toolCallId?: string }).toolCallId !== undefined
+                ? { toolCallId: (agentEvent as { toolCallId?: string }).toolCallId }
+                : {}),
+            });
+            planStepOrder += 1;
+          }
           queue.push({
             type: 'tool_use',
             name: agentEvent.toolName ?? '',
@@ -194,6 +229,17 @@ export const backendFromPiAgent = (deps: PiChatBackendDeps): ChatBackend => ({
       } finally {
         unregisterApproval?.();
         unsub();
+        if (harness) {
+          const steps = [...planSteps];
+          await harness.recordPlan({
+            traceId,
+            userId: options.userId,
+            sessionId: options.sessionId,
+            intent,
+            plan: buildHarnessPlanFromToolCalls(steps),
+            metadata: harnessPlanStepsMetadata(steps),
+          });
+        }
         agent.reset();
         await promptPromise;
       }
