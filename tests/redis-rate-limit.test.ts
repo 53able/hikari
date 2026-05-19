@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createRedisSlidingWindowRateLimiter,
   createRedisRateLimitGuard,
-} from '../src/core/redis-rate-limit.js';
+} from '../src/storage/redis/redis-rate-limit.js';
 import { createFakeRedis } from './helpers/redis-fake.js';
 
 describe('createRedisSlidingWindowRateLimiter', () => {

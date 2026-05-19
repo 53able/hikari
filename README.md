@@ -122,22 +122,26 @@ const result = await adapter.chat(
 );
 ```
 
-### Pi harness
+### Pi harness（推奨）
 
 ```typescript
-import { createHikariAgentWithOptions, createHarnessTracer } from '@53able/hikari';
+import { createHikariHarness } from '@53able/hikari/pi';
 
-const harness = createHarnessTracer(auditLog);
-const agent = createHikariAgentWithOptions(
+const { agent, runTurn } = createHikariHarness({
   registry,
-  engine,
-  { userId: 'user-1', permissions: ['purchase'], traceId: crypto.randomUUID() },
-  { harness },
-);
-await agent.prompt('List books in stock');
+  auditLog,
+  approvalGate: devAutoApprove,
+});
+
+await runTurn({
+  message: 'List books in stock',
+  context: { userId: 'user-1', permissions: ['purchase'] },
+});
 ```
 
-Pi は agent control plane（計画・ツール選択）を担い、副作用の実行は Hikari エンジンが決定論的に処理する。`hikari serve` は既定で Pi チャット UI を提供する（`LLM_PROVIDER` で Claude / OpenAI に切り替え可能）。
+Pi は agent control plane（計画・ツール選択）を担い、副作用の実行は Hikari エンジンが決定論的に処理する。intent / plan はターンあたり 1 回、ツール選択は engine 側で監査されます。
+
+`hikari serve` の既定ルートは Pi です。`LLM_PROVIDER=anthropic|openai` を明示した場合のみ Claude / OpenAI 直アダプタに切り替わります（REST 専用の escape hatch）。
 
 ### `hikari serve` の LLM バックエンド
 

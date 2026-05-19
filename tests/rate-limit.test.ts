@@ -104,17 +104,25 @@ describe('rate limiting', () => {
       rateLimitGuard: guard,
     });
 
-    const req1 = makeReq('POST', '/capabilities/ping', '{}');
-    const res1 = makeRes();
-    await adapter.handler(req1, res1.res);
-    expect(res1.status()).toBe(200);
+    const postInit = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-forwarded-for': '203.0.113.1',
+      },
+      body: '{}',
+    } as const;
+    const res1 = await adapter.fetch(
+      new Request('http://localhost/capabilities/ping', postInit),
+    );
+    expect(res1!.status).toBe(200);
 
-    const req2 = makeReq('POST', '/capabilities/ping', '{}');
-    const res2 = makeRes();
-    await adapter.handler(req2, res2.res);
-    expect(res2.status()).toBe(429);
-    expect(res2.headers()['Retry-After']).toBeTruthy();
-    const json = JSON.parse(res2.body()) as { error: { code: string } };
+    const res2 = await adapter.fetch(
+      new Request('http://localhost/capabilities/ping', postInit),
+    );
+    expect(res2!.status).toBe(429);
+    expect(res2!.headers.get('Retry-After')).toBeTruthy();
+    const json = (await res2!.json()) as { error: { code: string } };
     expect(json.error.code).toBe('RATE_LIMITED');
   });
 });

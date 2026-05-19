@@ -2,16 +2,18 @@ import { Hono } from 'hono';
 import {
   createHttpAdapter,
   createHeaderExecutionOptionsResolver,
+  missingLlmApiKeyMessage,
+  resolveLlmFromEnv,
+} from '../../src/index.js';
+import {
   createHikariExecutionOptionsMiddleware,
   mountHikariHttpAdapter,
   mountHikariCapabilityUi,
   mountHikariChat,
   mountHikariTraceViewer,
   mountHikariApprovals,
-  missingLlmApiKeyMessage,
-  resolveLlmFromEnv,
   type HikariHonoEnv,
-} from '../../src/index.js';
+} from '../../src/hono.js';
 import type { ApprovalApi } from '../../src/core/approval-store.js';
 import type { AuditStorage } from '../../src/core/audit.js';
 import type { Engine } from '../../src/core/execution.js';

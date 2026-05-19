@@ -8,9 +8,9 @@ import {
   backendFromClaude,
   backendFromOpenAi,
   backendFromPiAgent,
-  type ChatBackend,
   type PiChatBackendDeps,
-} from '../web/chat-server.js';
+} from '../web/chat-backends.js';
+import type { ChatBackend } from '../web/chat-stream.js';
 
 /** チャット API 向け `LLM_PROVIDER` の許容値。 */
 export const chatLlmProviderSchema = z.enum(['anthropic', 'openai', 'auto']);

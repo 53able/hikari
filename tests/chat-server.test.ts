@@ -1,6 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { IncomingMessage, ServerResponse } from 'node:http';
-import { Socket } from 'node:net';
 import { z } from 'zod';
 import {
   createRegistry,
@@ -17,46 +15,27 @@ import {
   type ChatBackend,
   type ChatStreamEvent,
   type OpenAiAdapter,
+  type ChatServer,
 } from '../src/index.js';
 
-function makeReq(method: string, url: string, body = ''): IncomingMessage {
-  const socket = new Socket();
-  const req = new IncomingMessage(socket);
-  req.method = method;
-  req.url = url;
-  if (body) {
-    req.push(body);
-    req.push(null);
-  } else {
-    req.push(null);
+const fetchChatServer = (
+  server: ChatServer,
+  method: string,
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> => {
+  const headers = new Headers(init.headers);
+  if (init.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
   }
-  return req;
-}
-
-function makeRes(): { res: ServerResponse; status: () => number; body: () => string } {
-  const socket = new Socket();
-  const req = new IncomingMessage(socket);
-  const res = new ServerResponse(req);
-  let statusCode = 200;
-  const bodyChunks: Buffer[] = [];
-  res.writeHead = (code: number) => {
-    statusCode = code;
-    return res;
-  };
-  res.write = (chunk: unknown) => {
-    bodyChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-    return true;
-  };
-  res.end = (chunk?: unknown) => {
-    if (chunk) bodyChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-    return res;
-  };
-  return {
-    res,
-    status: () => statusCode,
-    body: () => Buffer.concat(bodyChunks).toString('utf8'),
-  };
-}
+  return server.app.fetch(
+    new Request(`http://localhost${path}`, {
+      ...init,
+      method,
+      headers,
+    }),
+  );
+};
 
 const ping = defineCapability({
   name: 'ping',
@@ -112,19 +91,19 @@ describe('createChatServer devtools routes', () => {
   });
 
   it('GET /traces returns HTML', async () => {
-    const { res, status, body } = makeRes();
-    await server.handler(makeReq('GET', '/traces'), res);
-    expect(status()).toBe(200);
-    expect(body()).toContain('<!DOCTYPE html>');
-    expect(body()).toContain('Hikari Trace Viewer');
+    const response = await fetchChatServer(server, 'GET', '/traces');
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('<!DOCTYPE html>');
+    expect(body).toContain('Hikari Trace Viewer');
   });
 
   it('GET /capabilities returns explorer HTML', async () => {
-    const { res, status, body } = makeRes();
-    await server.handler(makeReq('GET', '/capabilities'), res);
-    expect(status()).toBe(200);
-    expect(body()).toContain('Capability Explorer');
-    expect(body()).toContain('ping');
+    const response = await fetchChatServer(server, 'GET', '/capabilities');
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('Capability Explorer');
+    expect(body).toContain('ping');
   });
 
   it('GET /capabilities/:name/form returns input form HTML', async () => {
@@ -151,27 +130,25 @@ describe('createChatServer devtools routes', () => {
       },
       resolveExecutionOptions: () => ({ userId: 'tester', permissions: [] }),
     });
-    const { res, status, body } = makeRes();
-    await formServer.handler(makeReq('GET', '/capabilities/greet/form'), res);
-    expect(status()).toBe(200);
-    expect(body()).toContain('<!DOCTYPE html>');
-    expect(body()).toContain('name="name"');
-    expect(body()).toContain('action="/api/capabilities/greet"');
+    const response = await fetchChatServer(formServer, 'GET', '/capabilities/greet/form');
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('<!DOCTYPE html>');
+    expect(body).toContain('name="name"');
+    expect(body).toContain('action="/api/capabilities/greet"');
   });
 
   it('GET /api/capabilities lists registry', async () => {
-    const { res, status, body } = makeRes();
-    await server.handler(makeReq('GET', '/api/capabilities'), res);
-    expect(status()).toBe(200);
-    const json = JSON.parse(body()) as { capabilities: { name: string }[] };
+    const response = await fetchChatServer(server, 'GET', '/api/capabilities');
+    expect(response.status).toBe(200);
+    const json = (await response.json()) as { capabilities: { name: string }[] };
     expect(json.capabilities.some((c) => c.name === 'ping')).toBe(true);
   });
 
   it('GET /api/openapi.json exports OpenAPI document', async () => {
-    const { res, status, body } = makeRes();
-    await server.handler(makeReq('GET', '/api/openapi.json'), res);
-    expect(status()).toBe(200);
-    const doc = JSON.parse(body()) as { openapi: string; paths: Record<string, unknown> };
+    const response = await fetchChatServer(server, 'GET', '/api/openapi.json');
+    expect(response.status).toBe(200);
+    const doc = (await response.json()) as { openapi: string; paths: Record<string, unknown> };
     expect(doc.openapi).toBe('3.0.3');
     expect(doc.paths['/api/capabilities/ping']).toBeDefined();
   });
@@ -183,11 +160,11 @@ describe('createChatServer devtools routes', () => {
       approvals: createApprovalApi(store),
       resolveExecutionOptions: () => ({ userId: 'tester', permissions: [] }),
     });
-    const { res, status, body } = makeRes();
-    await approvalServer.handler(makeReq('GET', '/approvals'), res);
-    expect(status()).toBe(200);
-    expect(body()).toContain('Hikari Approvals');
-    expect(body()).toContain('<!DOCTYPE html>');
+    const response = await fetchChatServer(approvalServer, 'GET', '/approvals');
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('Hikari Approvals');
+    expect(body).toContain('<!DOCTYPE html>');
   });
 
   it('persists traceIds on assistant session message when stream completes', async () => {
@@ -199,15 +176,18 @@ describe('createChatServer devtools routes', () => {
       resolveExecutionOptions: () => ({ userId: 'tester', permissions: [] }),
     });
 
-    const start = makeRes();
-    await chatServer.handler(
-      makeReq('POST', '/chat', JSON.stringify({ message: 'hi', sessionId: session.id })),
-      start.res,
+    const start = await fetchChatServer(
+      chatServer,
+      'POST',
+      '/chat',
+      { body: JSON.stringify({ message: 'hi', sessionId: session.id }) },
     );
-    const { requestId } = JSON.parse(start.body()) as { requestId: string };
+    expect(start.status).toBe(200);
+    const { requestId } = (await start.json()) as { requestId: string };
 
-    const sse = makeRes();
-    await chatServer.handler(makeReq('GET', `/events?requestId=${requestId}`), sse.res);
+    const sse = await fetchChatServer(chatServer, 'GET', `/events?requestId=${requestId}`);
+    expect(sse.status).toBe(200);
+    await sse.text();
 
     const messages = sessions.getMessages(session.id);
     const assistant = messages.find((m) => m.role === 'assistant');

@@ -1,4 +1,3 @@
-import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Registry } from '../core/registry.js';
 import type { Engine, ExecutionOptions } from '../core/execution.js';
 import {
@@ -27,10 +26,10 @@ export interface HttpAdapterOptions {
   /** 全ルートの URL プレフィックス（デフォルト: `''`）。サブパスへのマウント時に指定する。 */
   basePath?: string;
   /** リクエストから `ExecutionOptions` を解決する関数。認証・認可の境界としてここで実装する（必須）。 */
-  resolveExecutionOptions: (req: IncomingMessage) => ExecutionOptions | Promise<ExecutionOptions>;
+  resolveExecutionOptions: (req: Request) => ExecutionOptions | Promise<ExecutionOptions>;
   /** リクエストボディの最大サイズ（バイト）。デフォルト: 1 MiB。 */
   maxBodyBytes?: number;
-  /** CORS オリジンの許可リスト。リストに含まれるオリジンにのみ `Access-Control-Allow-Origin` / `Allow-Methods` / `Allow-Headers` を返す。 */
+  /** CORS オリジンの許可リスト。リストに含まれるオリジンにのみ CORS ヘッダーを返す。 */
   corsOrigins?: string[];
   /** 指定時は POST 実行前に IP / userId / capability 単位でレート制限する。 */
   rateLimitGuard?: RateLimitGuard;
@@ -44,57 +43,62 @@ export interface HttpAdapterOptions {
 }
 
 /**
- * `createHttpAdapter` が返すハンドラーオブジェクト。
- * `handler` は Node.js `http` モジュールと直接互換。`express` は Express ミドルウェアとして使用できる。
+ * `createHttpAdapter` が返す fetch ハンドラー。
+ * ルートに一致しない場合は `null` を返し、呼び出し元が次のハンドラーへ委譲できる。
  */
 export type HttpAdapter = {
-  /**
-   * リクエストを処理した場合は `true`、ルートに一致しなかった場合は `false` を返す。
-   * `false` のとき呼び出し元は次のハンドラーに委譲できる。
-   */
-  readonly handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
-  /** Express / Connect 互換のミドルウェア。マッチしない場合は `next()` を呼ぶ。 */
-  readonly express: (req: IncomingMessage, res: ServerResponse, next: () => void) => void;
+  readonly fetch: (req: Request) => Promise<Response | null>;
 };
 
-const idempotencyKeyFromRequest = (req: IncomingMessage): string | undefined => {
-  const raw = req.headers['idempotency-key'];
+const idempotencyKeyFromRequest = (req: Request): string | undefined => {
+  const raw = req.headers.get('idempotency-key');
   if (!raw) return undefined;
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  const trimmed = value.trim();
+  const trimmed = raw.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
 const mergeIdempotencyKey = (
-  req: IncomingMessage,
+  req: Request,
   execOptions: ExecutionOptions,
 ): ExecutionOptions => {
   const idempotencyKey = idempotencyKeyFromRequest(req);
   return idempotencyKey ? { ...execOptions, idempotencyKey } : execOptions;
 };
 
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  const payload = JSON.stringify(body);
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(payload);
-}
+const jsonResponse = (status: number, body: unknown, headers?: HeadersInit): Response =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...headers },
+  });
 
-const sendHtml = (res: ServerResponse, status: number, html: string): void => {
-  res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
-  res.end(html);
+const htmlResponse = (status: number, html: string, headers?: HeadersInit): Response =>
+  new Response(html, {
+    status,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', ...headers },
+  });
+
+const corsHeaders = (req: Request, corsOrigins: readonly string[]): HeadersInit => {
+  const origin = req.headers.get('origin');
+  if (!origin || !corsOrigins.includes(origin)) {
+    return {};
+  }
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type,Authorization,Idempotency-Key',
+  };
 };
 
-const sendCapabilityResponse = (
-  req: IncomingMessage,
-  res: ServerResponse,
+const capabilityResponse = (
+  req: Request,
   status: number,
   body: unknown,
   capabilityName: string,
   uiBasePath: string,
-): void => {
+  cors: HeadersInit,
+): Response => {
   if (!wantsHtmlResponse(req)) {
-    sendJson(res, status, body);
-    return;
+    return jsonResponse(status, body, cors);
   }
   const formUrl = `${uiBasePath}/${encodeURIComponent(capabilityName)}/form`;
   const html = renderCapabilityResultHtml({
@@ -104,34 +108,28 @@ const sendCapabilityResponse = (
     formUrl,
     listUrl: uiBasePath,
   });
-  sendHtml(res, status, html);
+  return htmlResponse(status, html, cors);
 };
 
-async function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = '';
-    let size = 0;
-    req.setEncoding('utf8');
-    req.on('data', (chunk: string) => {
-      size += Buffer.byteLength(chunk);
-      if (size > maxBytes) {
-        reject(Object.assign(new Error('Request body too large'), { status: 413 }));
-        return;
-      }
-      data += chunk;
-    });
-    req.on('end', () => resolve(data));
-    req.on('error', reject);
-  });
-}
+const readBodyText = async (req: Request, maxBytes: number): Promise<string> => {
+  const buffer = await req.arrayBuffer();
+  if (buffer.byteLength > maxBytes) {
+    throw Object.assign(new Error('Request body too large'), { status: 413 });
+  }
+  return new TextDecoder().decode(buffer);
+};
 
-
-function errorToResponse(err: unknown): { status: number; body: unknown } {
+const errorToResponse = (err: unknown): { status: number; body: unknown } => {
   if (err instanceof CapabilityNotFoundError) {
     return { status: 404, body: { error: { code: 'NOT_FOUND', message: err.message } } };
   }
   if (err instanceof ValidationError) {
-    return { status: 400, body: { error: { code: 'VALIDATION_ERROR', message: err.message, issues: err.issues } } };
+    return {
+      status: 400,
+      body: {
+        error: { code: 'VALIDATION_ERROR', message: err.message, issues: err.issues },
+      },
+    };
   }
   if (err instanceof FormBodyParseError) {
     return { status: 400, body: { error: { code: 'VALIDATION_ERROR', message: err.message } } };
@@ -143,23 +141,24 @@ function errorToResponse(err: unknown): { status: number; body: unknown } {
     return { status: 409, body: { error: { code: 'APPROVAL_DENIED', message: err.message } } };
   }
   if (err instanceof IdempotencyConflictError) {
-    return { status: 409, body: { error: { code: 'IDEMPOTENCY_CONFLICT', message: err.message } } };
+    return {
+      status: 409,
+      body: { error: { code: 'IDEMPOTENCY_CONFLICT', message: err.message } },
+    };
   }
   const message = err instanceof Error ? err.message : 'Internal server error';
   return { status: 500, body: { error: { code: 'INTERNAL_ERROR', message } } };
-}
+};
+
+const pathnameFromRequest = (req: Request): string => new URL(req.url).pathname;
 
 /**
- * 登録済みケイパビリティを REST エンドポイントとして公開する Node.js HTTP アダプターを生成する。
+ * 登録済みケイパビリティを REST エンドポイントとして公開する fetch アダプターを生成する。
  *
  * ルート:
  * - `GET  {basePath}/capabilities` — 全ケイパビリティのメタデータ一覧
  * - `GET  {basePath}/capabilities/:name` — 指定ケイパビリティのメタデータ
  * - `POST {basePath}/capabilities/:name` — ケイパビリティの実行（JSON ボディを入力として受け取る）
- *
- * @param registry - ケイパビリティ定義のソース。
- * @param engine - POST リクエストの実行に使用するエンジン。
- * @param options - ベースパス・認証リゾルバー・CORS などの設定。
  */
 export function createHttpAdapter(
   registry: Registry,
@@ -171,67 +170,52 @@ export function createHttpAdapter(
   const corsOrigins = options.corsOrigins ?? [];
   const uiBasePath = options.capabilityResultHtml?.uiBasePath ?? '/capabilities';
 
-  const setCors = (req: IncomingMessage, res: ServerResponse): void => {
-    const origin = req.headers['origin'];
-    if (origin && corsOrigins.includes(origin)) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-      res.setHeader(
-        'Access-Control-Allow-Headers',
-        'Content-Type,Authorization,Idempotency-Key',
-      );
-    }
-  };
-
-  const handler = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
-    setCors(req, res);
-    const method = req.method ?? 'GET';
-    const url = req.url ?? '/';
+  const fetchHandler = async (req: Request): Promise<Response | null> => {
+    const cors = corsHeaders(req, corsOrigins);
+    const method = req.method;
+    const pathname = pathnameFromRequest(req);
 
     if (method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
-      return true;
+      return new Response(null, { status: 204, headers: cors });
     }
 
     const listPath = `${basePath}/capabilities`;
     const capPath = `${basePath}/capabilities/`;
     const openApiPath = `${basePath}/openapi.json`;
 
-    if (method === 'GET' && url === openApiPath) {
-      sendJson(res, 200, exportOpenApiDocument(registry, { basePath }));
-      return true;
+    if (method === 'GET' && pathname === openApiPath) {
+      return jsonResponse(200, exportOpenApiDocument(registry, { basePath }), cors);
     }
 
-    if (method === 'GET' && url === listPath) {
-      sendJson(res, 200, { capabilities: buildRegistryMeta(registry) });
-      return true;
+    if (method === 'GET' && pathname === listPath) {
+      return jsonResponse(200, { capabilities: buildRegistryMeta(registry) }, cors);
     }
 
-    if (method === 'GET' && url.startsWith(capPath)) {
-      const name = decodeURIComponent(url.slice(capPath.length).split('?')[0]);
+    if (method === 'GET' && pathname.startsWith(capPath)) {
+      const name = decodeURIComponent(pathname.slice(capPath.length).split('/')[0] ?? '');
       const cap = registry.get(name);
       if (!cap) {
-        sendJson(res, 404, { error: { code: 'NOT_FOUND', message: `Capability '${name}' not found` } });
-        return true;
+        return jsonResponse(
+          404,
+          { error: { code: 'NOT_FOUND', message: `Capability '${name}' not found` } },
+          cors,
+        );
       }
-      sendJson(res, 200, buildCapabilityMeta(cap));
-      return true;
+      return jsonResponse(200, buildCapabilityMeta(cap), cors);
     }
 
-    if (method === 'POST' && url.startsWith(capPath)) {
-      const name = decodeURIComponent(url.slice(capPath.length).split('?')[0]);
+    if (method === 'POST' && pathname.startsWith(capPath)) {
+      const name = decodeURIComponent(pathname.slice(capPath.length).split('/')[0] ?? '');
       const cap = registry.get(name);
       if (!cap) {
         const notFoundBody = {
           error: { code: 'NOT_FOUND', message: `Capability '${name}' not found` },
         };
-        sendCapabilityResponse(req, res, 404, notFoundBody, name, uiBasePath);
-        return true;
+        return capabilityResponse(req, 404, notFoundBody, name, uiBasePath, cors);
       }
       try {
-        const rawBody = await readBody(req, maxBodyBytes);
-        const contentType = (req.headers['content-type'] ?? '')
+        const rawBody = await readBodyText(req, maxBodyBytes);
+        const contentType = (req.headers.get('content-type') ?? '')
           .split(';')[0]
           ?.trim()
           .toLowerCase();
@@ -244,7 +228,10 @@ export function createHttpAdapter(
                   new URLSearchParams(rawBody),
                 )
               : (JSON.parse(rawBody) as Record<string, unknown>);
-        const execOptions = mergeIdempotencyKey(req, await options.resolveExecutionOptions(req));
+        const execOptions = mergeIdempotencyKey(
+          req,
+          await options.resolveExecutionOptions(req),
+        );
         if (options.rateLimitGuard) {
           const limited = await Promise.resolve(
             options.rateLimitGuard.check({
@@ -254,40 +241,39 @@ export function createHttpAdapter(
             }),
           );
           if (!limited.allowed) {
-            res.writeHead(429, {
-              'Content-Type': 'application/json',
-              'Retry-After': String(limited.retryAfterSeconds),
-            });
-            res.end(
-              JSON.stringify({
+            return jsonResponse(
+              429,
+              {
                 error: {
                   code: 'RATE_LIMITED',
                   message: 'Too many requests',
                   retryAfterSeconds: limited.retryAfterSeconds,
                 },
-              }),
+              },
+              { ...cors, 'Retry-After': String(limited.retryAfterSeconds) },
             );
-            return true;
           }
         }
         const result = await engine.execute(name, input, execOptions);
-        sendCapabilityResponse(req, res, 200, result, name, uiBasePath);
+        return capabilityResponse(req, 200, result, name, uiBasePath, cors);
       } catch (err) {
+        if (err && typeof err === 'object' && 'status' in err && err.status === 413) {
+          return capabilityResponse(
+            req,
+            413,
+            { error: { code: 'PAYLOAD_TOO_LARGE', message: 'Request body too large' } },
+            name,
+            uiBasePath,
+            cors,
+          );
+        }
         const { status, body } = errorToResponse(err);
-        sendCapabilityResponse(req, res, status, body, name, uiBasePath);
+        return capabilityResponse(req, status, body, name, uiBasePath, cors);
       }
-      return true;
     }
 
-    return false;
+    return null;
   };
 
-  return {
-    handler,
-    express(req, res, next) {
-      handler(req, res).then((handled) => {
-        if (!handled) next();
-      }).catch(() => next());
-    },
-  };
+  return { fetch: fetchHandler };
 }

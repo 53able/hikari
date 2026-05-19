@@ -33,33 +33,36 @@ export const serveCommand: CliCommand = async (ctx, args) => {
   const useAnyRedis = useIdempotencyRedis || useApprovalRedis || useRateLimitRedis || rateLimitRedisFromEnv;
 
   try {
-    const { registry } = await loadRegistryFrom(entry);
+    const { registry, runtime } = await loadRegistryFrom(entry);
 
     const {
       createAuditLog,
       createInMemoryStorage,
-      createJsonlAuditStorage,
-      createEngine,
       devAutoApprove,
-      createHarnessTracer,
       createInMemoryApprovalStore,
-      createFileApprovalStore,
       createApprovalApi,
-      createApprovalFileLogger,
-      wrapApprovalApiWithFileLog,
       createInMemoryIdempotencyStore,
-      createFileIdempotencyStore,
-      createServeRateLimitGuard,
       approvalNotifiersFromEnv,
       composeApprovalNotifiers,
       createQueuedApprovalNotifier,
+    } = await import('../../core/index.js');
+    const {
+      createJsonlAuditStorage,
+      createFileApprovalStore,
+      createApprovalFileLogger,
+      wrapApprovalApiWithFileLog,
+      createFileIdempotencyStore,
+    } = await import('../../file.js');
+    const {
       connectHikariRedis,
       resolveRedisUrl,
       createRedisIdempotencyStore,
       createRedisApprovalStore,
-    } = await import('../../core/index.js');
+      createServeRateLimitGuard,
+    } = await import('../../redis.js');
     const { createChatServer } = await import('../../web/chat-server.js');
     const { resolveServeChatBackend } = await import('../../adapters/llm-provider.js');
+    const { createHikariHarness } = await import('../../adapters/pi.js');
     const { createSessionManager } = await import('../../agent/session.js');
     const { createHeaderExecutionOptionsResolver } = await import('../../web/auth.js');
 
@@ -91,7 +94,6 @@ export const serveCommand: CliCommand = async (ctx, args) => {
       useRateLimitRedis || rateLimitRedisFromEnv,
     );
 
-    const harness = createHarnessTracer(auditLog, { registry, auditLevel: 'basic' });
     const sessionMgr = createSessionManager();
 
     const isProduction = process.env.NODE_ENV === 'production';
@@ -136,17 +138,19 @@ export const serveCommand: CliCommand = async (ctx, args) => {
       ? approvalStore.createGate({ onPending })
       : devAutoApprove;
 
-    const engine = createEngine({
+    const hikariHarness = createHikariHarness({
       registry,
       auditLog,
       approvalGate,
       idempotencyStore,
+      runtime,
     });
+    const engine = hikariHarness.engine;
 
     const { backend, provider: llmProvider } = resolveServeChatBackend({
       registry,
       engine,
-      harness,
+      harnessApi: hikariHarness,
       onRegisterApprovalNotifier: (traceId, notify) => {
         approvalNotifiers.set(traceId, notify);
         return () => approvalNotifiers.delete(traceId);

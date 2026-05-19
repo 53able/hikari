@@ -1,6 +1,6 @@
 import { appendFile, readFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { AuditEntry, AuditStorage } from './audit.js';
+import type { AuditEntry, AuditStorage } from '../../core/audit.js';
 
 type AuditFilter = Parameters<AuditStorage['query']>[0];
 

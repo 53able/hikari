@@ -1,4 +1,4 @@
-import type { HikariRedis } from '../../src/core/redis-client.js';
+import type { HikariRedis } from '../../src/storage/redis/redis-client.js';
 
 type ZMember = { readonly score: number; readonly value: string };
 

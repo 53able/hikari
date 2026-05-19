@@ -103,21 +103,22 @@ describe('createChatServer dev-session parity', () => {
 
   it('form POST with Accept text/html returns HTML result page', async () => {
     const storage = createInMemoryStorage();
-    const registry = createBookstoreEngine().registry;
+    const bookstore = createBookstoreEngine();
     const engine = createEngine({
-      registry,
+      registry: bookstore.registry,
       auditLog: createAuditLog(storage),
       approvalGate: autoApprove,
+      runtime: bookstore.runtime,
     });
     const pingOnly = createChatServer(mockBackend, {
       serveStaticUi: false,
-      devtools: { storage, registry },
+      devtools: { storage, registry: bookstore.registry },
       enableDevSession: true,
       resolveExecutionOptions: createHeaderExecutionOptionsResolver({
         readCookies: true,
       }),
       httpApi: {
-        registry,
+        registry: bookstore.registry,
         engine,
         basePath: '/api',
         capabilityResultHtml: { uiBasePath: '/capabilities' },

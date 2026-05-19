@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { needsHumanApproval, policy } from '../src/core/policy.js';
+import { needsHumanApproval, policy, resolveEffectivePolicy } from '../src/core/policy.js';
 import type { Policy } from '../src/core/capability.js';
 
 const basePolicy = (overrides: Partial<Policy> = {}): Policy => ({
@@ -31,5 +31,19 @@ describe('needsHumanApproval', () => {
 describe('policy helpers', () => {
   it('policy.role sets requiredPermissions', () => {
     expect(policy.role('admin').requiredPermissions).toEqual(['admin']);
+  });
+});
+
+describe('resolveEffectivePolicy', () => {
+  it('escalates basic audit to full for write side effects', () => {
+    const effective = resolveEffectivePolicy(
+      basePolicy({ sideEffects: ['read', 'write'], auditLevel: 'basic' }),
+    );
+    expect(effective.auditLevel).toBe('full');
+  });
+
+  it('requires rate limit for external side effects', () => {
+    const effective = resolveEffectivePolicy(basePolicy({ sideEffects: ['external'] }));
+    expect(effective.requiresRateLimit).toBe(true);
   });
 });

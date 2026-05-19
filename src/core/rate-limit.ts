@@ -1,4 +1,3 @@
-import type { IncomingMessage } from 'node:http';
 
 /** レート制限チェックの結果。 */
 export type RateLimitResult =
@@ -141,14 +140,14 @@ export const createDefaultRateLimitGuard = (): RateLimitGuard => {
 };
 
 /**
- * `IncomingMessage` からクライアント IP を推定する。
- * `X-Forwarded-For` の先頭を優先し、なければソケットアドレスを使う。
+ * `Request` からクライアント IP を推定する。
+ * `X-Forwarded-For` の先頭を優先し、なければ `unknown` を返す。
  */
-export const clientIpFromRequest = (req: IncomingMessage): string => {
-  const forwarded = req.headers['x-forwarded-for'];
+export const clientIpFromRequest = (req: Request): string => {
+  const forwarded = req.headers.get('x-forwarded-for');
   if (forwarded) {
-    const first = String(forwarded).split(',')[0]?.trim();
+    const first = forwarded.split(',')[0]?.trim();
     if (first) return first;
   }
-  return req.socket.remoteAddress ?? 'unknown';
+  return 'unknown';
 };

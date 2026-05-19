@@ -6,6 +6,12 @@ export type SideEffectType = 'read' | 'write' | 'financial' | 'irreversible' | '
 /** 入力値に応じて承認要否を判定する述語。Zod パース後の入力が渡される。 */
 export type ApprovalPredicate<T = unknown> = (input: T) => boolean;
 
+/**
+ * ケイパビリティハンドラーに注入する決定論的ランタイム。
+ * `createEngine({ runtime })` で登録し、handler から `context.runtime` 経由で参照する。
+ */
+export type CapabilityRuntime = Readonly<Record<string, unknown>>;
+
 /** 実行エンジンがケイパビリティを扱う方針を定義する。権限要件・副作用・承認要否・監査詳細度を含む。 */
 export interface Policy {
   /** 呼び出し元が保持すべき権限文字列のリスト。`ExecutionContext.permissions` と照合される。 */
@@ -35,6 +41,8 @@ export interface ExecutionContext {
   intent?: string;
   /** この実行で呼び出し元に付与されている権限セット。 */
   permissions: Set<string>;
+  /** ハンドラーが副作用を実行するための決定論的依存（DB クライアント等）。 */
+  runtime: CapabilityRuntime;
 }
 
 /**

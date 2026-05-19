@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { HikariRedis } from './redis-client.js';
-import type { ExecutionResult } from './execution.js';
-import type { IdempotencyRecord, IdempotencyStore } from './idempotency-store.js';
+import type { ExecutionResult } from '../../core/execution.js';
+import type { IdempotencyRecord, IdempotencyStore } from '../../core/idempotency-store.js';
 
 const executionResultSchema = z.object({
   success: z.literal(true),

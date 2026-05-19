@@ -2,10 +2,18 @@ import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import type { Capability, ExecutionContext } from './capability.js';
 import type { AuditLogger } from './audit.js';
-import { evaluatePolicy, needsHumanApproval, describeRisk, PolicyViolationError } from './policy.js';
+import {
+  evaluatePolicy,
+  describeRisk,
+  PolicyViolationError,
+  resolveEffectivePolicy,
+} from './policy.js';
+import type { CapabilityRuntime } from './capability.js';
 import type { ApprovalGate } from './approval.js';
 import { ApprovalDeniedError } from './approval.js';
 import type { Registry } from './registry.js';
+import type { HarnessTracer } from './harness-trace.js';
+import { buildHarnessPlan } from './harness-plan.js';
 import { scrubAuditPayload } from './audit-scrub.js';
 import type { IdempotencyStore } from './idempotency-store.js';
 import {
@@ -108,11 +116,23 @@ export type Engine = {
   ) => Promise<ExecutionResult<T>>;
 };
 
+/** harness 監査の記録範囲。`tool-only` は Pi harness 層と併用する。 */
+export type HarnessMode = 'full' | 'tool-only';
+
 type EngineConfig = {
   registry: Registry;
   auditLog: AuditLogger;
   approvalGate?: ApprovalGate;
   idempotencyStore?: IdempotencyStore;
+  /** ハンドラーに渡す決定論的ランタイム依存。 */
+  runtime?: CapabilityRuntime;
+  /** 指定時は `execute` 内で harness 監査イベントを記録する。 */
+  harness?: HarnessTracer;
+  /**
+   * harness 記録モード。`full` は intent / plan / tool すべて。`tool-only` は `tool_selected` のみ。
+   * @defaultValue `'full'`
+   */
+  harnessMode?: HarnessMode;
 };
 
 /**
@@ -135,10 +155,11 @@ const recordAudit = async (
   type: Parameters<AuditLogger['record']>[0],
   capabilityName: string,
   context: ExecutionContext,
+  auditLevel: Capability['policy']['auditLevel'],
   data?: AuditPayload,
 ): Promise<void> => {
-  if (capability.policy.auditLevel === 'none') return;
-  const scrubbed = scrubAuditPayload(capability.policy.auditLevel, data);
+  if (auditLevel === 'none') return;
+  const scrubbed = scrubAuditPayload(auditLevel, data);
   await auditLog.record(type, capabilityName, context, scrubbed);
 };
 
@@ -149,11 +170,49 @@ export function createEngine(config: EngineConfig): Engine {
   };
 }
 
+const recordHarnessForExecute = async (
+  harness: HarnessTracer,
+  registry: Registry,
+  capabilityName: string,
+  context: ExecutionContext,
+  toolInput: unknown,
+  mode: HarnessMode,
+): Promise<void> => {
+  const base = {
+    traceId: context.traceId,
+    userId: context.userId,
+    sessionId: context.sessionId,
+    intent: context.intent,
+  };
+  if (mode === 'full') {
+    if (context.intent) {
+      await harness.recordIntent(base);
+    }
+    await harness.recordPlan({
+      ...base,
+      plan: buildHarnessPlan(registry),
+    });
+  }
+  await harness.recordToolSelected({
+    ...base,
+    capabilityName,
+    toolInput,
+  });
+};
+
 async function runCapability<T>(
   capabilityName: string,
   input: unknown,
   options: ExecutionOptions,
-  { registry, auditLog, approvalGate, idempotencyStore }: EngineConfig,
+  {
+    registry,
+    auditLog,
+    approvalGate,
+    idempotencyStore,
+    runtime = {},
+    harness,
+    harnessMode = 'full',
+  }: EngineConfig,
 ): Promise<ExecutionResult<T>> {
   const capability = registry.get(capabilityName);
   if (!capability) throw new CapabilityNotFoundError(capabilityName);
@@ -176,45 +235,84 @@ async function runCapability<T>(
     traceId: options.traceId ?? randomUUID(),
     intent: options.intent,
     permissions: new Set(options.permissions ?? []),
+    runtime,
   };
 
-  await recordAudit(auditLog, capability, 'capability_invoked', capabilityName, context, { input });
+  const effectivePolicy = resolveEffectivePolicy(capability.policy);
+
+  await recordAudit(
+    auditLog,
+    capability,
+    'capability_invoked',
+    capabilityName,
+    context,
+    effectivePolicy.auditLevel,
+    { input },
+  );
 
   // Validate input
   const parseResult = capability.inputSchema.safeParse(input);
   if (!parseResult.success) {
-    await recordAudit(auditLog, capability, 'execution_failed', capabilityName, context, {
-      input,
-      error: 'Input validation failed',
-    });
+    await recordAudit(
+      auditLog,
+      capability,
+      'execution_failed',
+      capabilityName,
+      context,
+      effectivePolicy.auditLevel,
+      { input, error: 'Input validation failed' },
+    );
     throw new ValidationError(parseResult.error.issues, capabilityName);
   }
+
+  const effectivePolicyWithInput = resolveEffectivePolicy(capability.policy, parseResult.data);
 
   // Policy check
   try {
     evaluatePolicy(capabilityName, capability.policy, context);
   } catch (err) {
     if (err instanceof PolicyViolationError) {
-      await recordAudit(auditLog, capability, 'policy_denied', capabilityName, context, {
-        input,
-        error: err.message,
-      });
+      await recordAudit(
+        auditLog,
+        capability,
+        'policy_denied',
+        capabilityName,
+        context,
+        effectivePolicyWithInput.auditLevel,
+        { input, error: err.message },
+      );
     }
     throw err;
   }
 
+  if (harness) {
+    await recordHarnessForExecute(
+      harness,
+      registry,
+      capabilityName,
+      context,
+      parseResult.data,
+      harnessMode,
+    );
+  }
+
   // Approval gate for high-risk operations
-  if (needsHumanApproval(capability.policy, parseResult.data)) {
+  if (effectivePolicyWithInput.requiresApproval) {
     if (!approvalGate) {
       throw new Error(
         `Capability '${capabilityName}' requires approval but no ApprovalGate is configured`,
       );
     }
     const riskLevel = describeRisk(capability.policy.sideEffects);
-    await recordAudit(auditLog, capability, 'approval_requested', capabilityName, context, {
-      input: parseResult.data,
-      metadata: { riskLevel },
-    });
+    await recordAudit(
+      auditLog,
+      capability,
+      'approval_requested',
+      capabilityName,
+      context,
+      effectivePolicyWithInput.auditLevel,
+      { input: parseResult.data, metadata: { riskLevel } },
+    );
 
     const requestId = randomUUID();
     const result = await approvalGate({
@@ -227,26 +325,41 @@ async function runCapability<T>(
     });
 
     if (!result.approved) {
-      await recordAudit(auditLog, capability, 'approval_denied', capabilityName, context, {
-        input: parseResult.data,
-        metadata: { reason: result.reason },
-      });
+      await recordAudit(
+        auditLog,
+        capability,
+        'approval_denied',
+        capabilityName,
+        context,
+        effectivePolicyWithInput.auditLevel,
+        { input: parseResult.data, metadata: { reason: result.reason } },
+      );
       throw new ApprovalDeniedError(requestId, capabilityName, result.reason);
     }
 
-    await recordAudit(auditLog, capability, 'approval_granted', capabilityName, context, {
-      input: parseResult.data,
-      metadata: { approvedBy: result.approvedBy },
-    });
+    await recordAudit(
+      auditLog,
+      capability,
+      'approval_granted',
+      capabilityName,
+      context,
+      effectivePolicyWithInput.auditLevel,
+      { input: parseResult.data, metadata: { approvedBy: result.approvedBy } },
+    );
   }
 
   // Execute handler
   try {
     const output = await capability.handler(parseResult.data, context);
-    await recordAudit(auditLog, capability, 'execution_succeeded', capabilityName, context, {
-      input: parseResult.data,
-      output,
-    });
+    await recordAudit(
+      auditLog,
+      capability,
+      'execution_succeeded',
+      capabilityName,
+      context,
+      effectivePolicyWithInput.auditLevel,
+      { input: parseResult.data, output },
+    );
     const result: ExecutionResult<T> = {
       success: true,
       output: output as T,
@@ -264,10 +377,15 @@ async function runCapability<T>(
     return result;
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
-    await recordAudit(auditLog, capability, 'execution_failed', capabilityName, context, {
-      input: parseResult.data,
-      error: errorMessage,
-    });
+    await recordAudit(
+      auditLog,
+      capability,
+      'execution_failed',
+      capabilityName,
+      context,
+      effectivePolicyWithInput.auditLevel,
+      { input: parseResult.data, error: errorMessage },
+    );
     throw err;
   }
 }

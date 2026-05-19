@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import type { HikariRedis } from './redis-client.js';
-import type { ApprovalGate, ApprovalRequest, ApprovalResult } from './approval.js';
+import type { ApprovalGate, ApprovalRequest, ApprovalResult } from '../../core/approval.js';
 import type {
   ApprovalStore,
   QueueApprovalGateOptions,
   StoredApprovalRequest,
-} from './approval-store.js';
+} from '../../core/approval-store.js';
 
 const approvalRequestStatusSchema = z.enum(['pending', 'approved', 'rejected']);
 

@@ -1,12 +1,12 @@
 import { appendFile, readFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import type { ExecutionResult } from './execution.js';
+import type { ExecutionResult } from '../../core/execution.js';
 import {
   createInMemoryIdempotencyStore,
   type IdempotencyRecord,
   type IdempotencyStore,
   type InMemoryIdempotencyStoreOptions,
-} from './idempotency-store.js';
+} from '../../core/idempotency-store.js';
 
 type SerializedIdempotencyLine = {
   readonly key: string;

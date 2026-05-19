@@ -5,10 +5,12 @@ import { tmpdir } from 'node:os';
 import {
   createInMemoryApprovalStore,
   createApprovalApi,
+} from '../src/index.js';
+import {
   createApprovalFileLogger,
   wrapApprovalApiWithFileLog,
   createFileApprovalStore,
-} from '../src/index.js';
+} from '../src/file.js';
 import type { ApprovalRequest } from '../src/core/approval.js';
 
 const sampleRequest = (id: string): ApprovalRequest => ({

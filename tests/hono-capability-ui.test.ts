@@ -10,8 +10,8 @@ import { z } from 'zod';
 import {
   createRegistry,
   defineCapability,
-  mountHikariCapabilityUi,
 } from '../src/index.js';
+import { mountHikariCapabilityUi } from '../src/hono.js';
 
 const ping = defineCapability({
   name: 'ping',

@@ -1,16 +1,18 @@
-import { randomUUID } from 'node:crypto';
 import {
   createRegistry,
   createAuditLog,
   createInMemoryStorage,
-  createEngine,
   devAutoApprove,
-  createHarnessTracer,
-  createHikariAgent,
-  intentSnippetFromMessage,
-  buildHarnessPlan,
 } from '../../src/index.js';
-import { listBooks, getBook, purchaseBook, addBook, deleteBook } from './capabilities.js';
+import { createHikariHarness } from '../../src/pi.js';
+import {
+  listBooks,
+  getBook,
+  purchaseBook,
+  addBook,
+  deleteBook,
+  bookstoreRuntime,
+} from './capabilities.js';
 
 const registry = createRegistry()
   .register(listBooks)
@@ -21,59 +23,46 @@ const registry = createRegistry()
 
 const storage = createInMemoryStorage();
 const auditLog = createAuditLog(storage);
-const engine = createEngine({ registry, auditLog, approvalGate: devAutoApprove });
-const harness = createHarnessTracer(auditLog, { registry, auditLevel: 'basic' });
+
+const { agent, runTurn } = createHikariHarness({
+  registry,
+  auditLog,
+  approvalGate: devAutoApprove,
+  runtime: bookstoreRuntime,
+  planPrefix: 'Answer using bookstore capabilities',
+  agentOptions: {
+    systemPrompt: 'You are a helpful bookstore assistant. Use available tools to answer questions.',
+  },
+});
 
 const baseCtx = {
   userId: 'user-alice',
   permissions: ['purchase'] as string[],
 };
 
+agent.subscribe((event) => {
+  if (event.type === 'tool_execution_start') {
+    console.log(`  → calling ${event.toolName}(${JSON.stringify(event.args)})`);
+  }
+  if (event.type === 'tool_execution_end' && !event.isError) {
+    console.log(`  ← ${event.toolName} done`);
+  }
+  if (event.type === 'message_end') {
+    const msg = event.message as { role?: string; content?: { type: string; text: string }[] };
+    if (msg.role === 'assistant') {
+      const text = msg.content
+        ?.filter((b) => b.type === 'text')
+        .map((b) => b.text)
+        .join('');
+      if (text) console.log('\nAssistant:', text);
+    }
+  }
+});
+
 const runPrompt = async (userMessage: string): Promise<void> => {
-  const traceId = randomUUID();
-  const intent = intentSnippetFromMessage(userMessage);
-  const contextRef = {
-    current: { ...baseCtx, traceId, intent },
-  };
-
-  await harness.recordIntent({ traceId, userId: baseCtx.userId, intent });
-  await harness.recordPlan({
-    traceId,
-    userId: baseCtx.userId,
-    intent,
-    plan: buildHarnessPlan(registry, {
-      prefix: 'Answer using bookstore capabilities',
-    }),
-  });
-
-  const agent = createHikariAgent(registry, engine, () => contextRef.current, {
-    harness,
-    systemPrompt: 'You are a helpful bookstore assistant. Use available tools to answer questions.',
-  });
-
-  agent.subscribe((event) => {
-    if (event.type === 'tool_execution_start') {
-      console.log(`  → calling ${event.toolName}(${JSON.stringify(event.args)})`);
-    }
-    if (event.type === 'tool_execution_end' && !event.isError) {
-      console.log(`  ← ${event.toolName} done`);
-    }
-    if (event.type === 'message_end') {
-      const msg = event.message as { role?: string; content?: { type: string; text: string }[] };
-      if (msg.role === 'assistant') {
-        const text = msg.content
-          ?.filter((b) => b.type === 'text')
-          .map((b) => b.text)
-          .join('');
-        if (text) console.log('\nAssistant:', text);
-      }
-    }
-  });
-
   console.log(`User: ${userMessage}\n`);
-  await agent.prompt(userMessage);
-  await agent.waitForIdle();
-  agent.reset();
+  const { traceId } = await runTurn({ message: userMessage, context: baseCtx });
+  console.log(`\n(traceId: ${traceId})`);
 };
 
 async function run() {

@@ -10,8 +10,8 @@ import {
   createAuditLog,
   createInMemoryStorage,
   autoApprove,
-  createFileIdempotencyStore,
 } from '../src/index.js';
+import { createFileIdempotencyStore } from '../src/file.js';
 
 const echo = defineCapability({
   name: 'echo',

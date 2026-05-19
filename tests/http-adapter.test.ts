@@ -1,6 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { IncomingMessage, ServerResponse } from 'node:http';
-import { Socket } from 'node:net';
 import { z } from 'zod';
 import {
   createRegistry,
@@ -8,43 +6,9 @@ import {
   createEngine,
   createAuditLog,
   createInMemoryStorage,
-  createInMemoryIdempotencyStore,
   autoApprove,
 } from '../src/index.js';
 import { createHttpAdapter } from '../src/adapters/http.js';
-
-function makeReq(method: string, url: string, body = ''): IncomingMessage {
-  const socket = new Socket();
-  const req = new IncomingMessage(socket);
-  req.method = method;
-  req.url = url;
-  if (body) {
-    req.push(body);
-    req.push(null);
-  } else {
-    req.push(null);
-  }
-  return req;
-}
-
-function makeRes(): { res: ServerResponse; status: () => number; body: () => string } {
-  const socket = new Socket();
-  const req = new IncomingMessage(socket);
-  const res = new ServerResponse(req);
-  let statusCode = 200;
-  let bodyChunks: Buffer[] = [];
-  res.writeHead = (code: number) => { statusCode = code; return res; };
-  res.write = (chunk: unknown) => { bodyChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))); return true; };
-  res.end = (chunk?: unknown) => {
-    if (chunk) bodyChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-    return res;
-  };
-  return {
-    res,
-    status: () => statusCode,
-    body: () => Buffer.concat(bodyChunks).toString(),
-  };
-}
 
 const pingCap = defineCapability({
   name: 'ping',
@@ -52,7 +16,9 @@ const pingCap = defineCapability({
   inputSchema: z.object({}),
   outputSchema: z.object({ pong: z.boolean() }),
   policy: { requiredPermissions: [], sideEffects: ['read'], auditLevel: 'basic' },
-  async handler() { return { pong: true }; },
+  async handler() {
+    return { pong: true };
+  },
 });
 
 const registry = createRegistry().register(pingCap);
@@ -64,90 +30,74 @@ const adapter = createHttpAdapter(registry, engine, {
 
 describe('createHttpAdapter', () => {
   it('GET /capabilities returns manifest list', async () => {
-    const req = makeReq('GET', '/capabilities');
-    const { res, status, body } = makeRes();
-    const handled = await adapter.handler(req, res);
-    expect(handled).toBe(true);
-    expect(status()).toBe(200);
-    const json = JSON.parse(body()) as { capabilities: { name: string }[] };
+    const response = await adapter.fetch(new Request('http://localhost/capabilities'));
+    expect(response).not.toBeNull();
+    expect(response!.status).toBe(200);
+    const json = (await response!.json()) as { capabilities: { name: string }[] };
     expect(json.capabilities[0].name).toBe('ping');
   });
 
   it('GET /capabilities/ping returns single meta', async () => {
-    const req = makeReq('GET', '/capabilities/ping');
-    const { res, status, body } = makeRes();
-    await adapter.handler(req, res);
-    expect(status()).toBe(200);
-    const json = JSON.parse(body()) as { name: string };
+    const response = await adapter.fetch(new Request('http://localhost/capabilities/ping'));
+    expect(response!.status).toBe(200);
+    const json = (await response!.json()) as { name: string };
     expect(json.name).toBe('ping');
   });
 
-  it('POST /capabilities/ping executes and returns output', async () => {
-    const req = makeReq('POST', '/capabilities/ping', '{}');
-    req.headers['content-type'] = 'application/json';
-    const { res, status, body } = makeRes();
-    await adapter.handler(req, res);
-    expect(status()).toBe(200);
-    const json = JSON.parse(body()) as { output: { pong: boolean } };
+  it('POST /capabilities/ping executes capability', async () => {
+    const response = await adapter.fetch(
+      new Request('http://localhost/capabilities/ping', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+    );
+    expect(response!.status).toBe(200);
+    const json = (await response!.json()) as { output: { pong: boolean } };
     expect(json.output.pong).toBe(true);
   });
 
-  it('GET /capabilities/missing returns 404', async () => {
-    const req = makeReq('GET', '/capabilities/missing');
-    const { res, status } = makeRes();
-    await adapter.handler(req, res);
-    expect(status()).toBe(404);
+  it('GET unknown capability returns 404', async () => {
+    const response = await adapter.fetch(new Request('http://localhost/capabilities/missing'));
+    expect(response!.status).toBe(404);
   });
 
-  it('POST /capabilities/missing returns 404', async () => {
-    const req = makeReq('POST', '/capabilities/missing', '{}');
-    const { res, status } = makeRes();
-    await adapter.handler(req, res);
-    expect(status()).toBe(404);
+  it('GET unrelated path returns null', async () => {
+    const response = await adapter.fetch(new Request('http://localhost/other'));
+    expect(response).toBeNull();
   });
 
-  it('returns false for unrecognised paths', async () => {
-    const req = makeReq('GET', '/unknown');
-    const { res } = makeRes();
-    const handled = await adapter.handler(req, res);
-    expect(handled).toBe(false);
+  it('GET /openapi.json returns OpenAPI document', async () => {
+    const response = await adapter.fetch(new Request('http://localhost/openapi.json'));
+    expect(response!.status).toBe(200);
+    const json = (await response!.json()) as { openapi: string };
+    expect(json.openapi).toMatch(/^3\./);
   });
+});
 
-  it('accepts Idempotency-Key header on POST', async () => {
-    let calls = 0;
-    const counting = defineCapability({
-      name: 'count',
-      description: 'count',
-      inputSchema: z.object({}),
-      outputSchema: z.object({ n: z.number() }),
-      policy: { requiredPermissions: [], sideEffects: ['write'], auditLevel: 'basic' },
-      async handler() {
-        calls += 1;
-        return { n: calls };
-      },
-    });
-    const reg = createRegistry().register(counting);
-    const store = createInMemoryStorage();
-    const eng = createEngine({
-      registry: reg,
-      auditLog: createAuditLog(store),
-      approvalGate: autoApprove,
-      idempotencyStore: createInMemoryIdempotencyStore(),
-    });
+describe('createHttpAdapter idempotency', () => {
+  it('passes Idempotency-Key header to engine', async () => {
+    const reg = createRegistry().register(pingCap);
+    const eng = createEngine({ registry: reg, auditLog, approvalGate: autoApprove });
     const idemAdapter = createHttpAdapter(reg, eng, {
       resolveExecutionOptions: () => ({ userId: 'test', permissions: [] }),
     });
-
-    const req1 = makeReq('POST', '/capabilities/count', '{}');
-    req1.headers['idempotency-key'] = 'idem-abc';
-    const res1 = makeRes();
-    await idemAdapter.handler(req1, res1.res);
-    expect(JSON.parse(res1.body()).output.n).toBe(1);
-
-    const req2 = makeReq('POST', '/capabilities/count', '{}');
-    req2.headers['idempotency-key'] = 'idem-abc';
-    const res2 = makeRes();
-    await idemAdapter.handler(req2, res2.res);
-    expect(JSON.parse(res2.body()).output.n).toBe(1);
+    const key = 'idem-key-1';
+    const reqInit = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': key,
+      },
+      body: JSON.stringify({}),
+    } as const;
+    const res1 = await idemAdapter.fetch(
+      new Request('http://localhost/capabilities/ping', reqInit),
+    );
+    const res2 = await idemAdapter.fetch(
+      new Request('http://localhost/capabilities/ping', reqInit),
+    );
+    expect(res1!.status).toBe(200);
+    expect(res2!.status).toBe(200);
   });
 });

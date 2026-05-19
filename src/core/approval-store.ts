@@ -134,6 +134,7 @@ export const createApprovalStore = (
       sessionId: stored.sessionId,
       traceId: stored.traceId,
       permissions: new Set(),
+      runtime: {},
     },
     riskLevel: stored.riskLevel,
     requestedAt: stored.requestedAt,

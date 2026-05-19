@@ -81,8 +81,15 @@ npx tsx examples/bookstore/main-flow.ts
 npx tsx examples/bookstore/main-pi.ts
 ```
 
-`createHikariAgent` でケイパビリティをAIエージェントのツールとして公開します。  
+`createHikariHarness` で Pi ターン単位の intent / plan と engine 側の tool 監査を同一 `traceId` で記録します。  
 自然言語のプロンプトからエージェントが適切なケイパビリティを選択・実行します。
+
+`hikari serve` でチャット → 承認 → `/traces` を確認する手順:
+
+1. `npx hikari serve --entry examples/bookstore/registry.ts`
+2. チャットで `list_books` 相当の質問 → `purchase_book` を依頼
+3. 承認キュー（`/approvals`）またはチャットの `/approve` / `/reject`
+4. `/traces` で intent / plan steps / tool / approval が 1 本の trace に並ぶことを確認
 
 > **前提**: `ANTHROPIC_API_KEY` 環境変数が必要です。
 
@@ -94,4 +101,5 @@ npx tsx examples/bookstore/main-pi.ts
 | `createRegistry` へのケイパビリティ登録 | `main.ts` |
 | `devAutoApprove` による承認ゲートのモック | `main.ts` |
 | harness trace + 動的プラン | `main-flow.ts` |
-| `createHikariAgent` によるAIエージェント統合 | `main-pi.ts` |
+| `createHikariHarness` による Pi 正規ルート | `main-pi.ts` |
+| `context.runtime` による決定論的ストア注入 | `capabilities.ts` + `createEngine({ runtime })` |
