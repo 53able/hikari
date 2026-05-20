@@ -1,38 +1,18 @@
 import { watch } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
-import { z } from 'zod';
-import type { ApprovalRequest } from '../../core/approval.js';
+import {
+  approvalDbSchema,
+  serializeStoredApproval,
+  deserializeStoredApproval,
+  storedApprovalToRequest,
+} from '../approval-serialization.js';
 import {
   createApprovalStore,
   type ApprovalStore,
   type ApprovalStorePersistence,
   type StoredApprovalRequest,
 } from '../../core/approval-store.js';
-
-const approvalRequestStatusSchema = z.enum(['pending', 'approved', 'rejected']);
-
-const serializedStoredApprovalSchema = z.object({
-  id: z.string(),
-  capabilityName: z.string(),
-  input: z.unknown(),
-  riskLevel: z.string(),
-  requestedAt: z.string(),
-  status: approvalRequestStatusSchema,
-  userId: z.string(),
-  sessionId: z.string(),
-  traceId: z.string(),
-  rejectedReason: z.string().optional(),
-  resolvedBy: z.string().optional(),
-  resolvedAt: z.string().optional(),
-});
-
-const approvalDbSchema = z.object({
-  version: z.literal(1),
-  requests: z.array(serializedStoredApprovalSchema),
-});
-
-type SerializedStoredApproval = z.infer<typeof serializedStoredApprovalSchema>;
 
 /** `createFileApprovalStore` のオプション。 */
 export type FileApprovalStoreOptions = {
@@ -45,51 +25,6 @@ export type FileApprovalStore = ApprovalStore & {
   readonly dispose: () => void;
 };
 
-const serializeStored = (stored: StoredApprovalRequest): SerializedStoredApproval => ({
-  id: stored.id,
-  capabilityName: stored.capabilityName,
-  input: stored.input,
-  riskLevel: stored.riskLevel,
-  requestedAt: stored.requestedAt.toISOString(),
-  status: stored.status,
-  userId: stored.userId,
-  sessionId: stored.sessionId,
-  traceId: stored.traceId,
-  rejectedReason: stored.rejectedReason,
-  resolvedBy: stored.resolvedBy,
-  resolvedAt: stored.resolvedAt?.toISOString(),
-});
-
-const deserializeStored = (raw: SerializedStoredApproval): StoredApprovalRequest => ({
-  id: raw.id,
-  capabilityName: raw.capabilityName,
-  input: raw.input,
-  riskLevel: raw.riskLevel,
-  requestedAt: new Date(raw.requestedAt),
-  status: raw.status,
-  userId: raw.userId,
-  sessionId: raw.sessionId,
-  traceId: raw.traceId,
-  rejectedReason: raw.rejectedReason,
-  resolvedBy: raw.resolvedBy,
-  resolvedAt: raw.resolvedAt ? new Date(raw.resolvedAt) : undefined,
-});
-
-const toApprovalRequest = (stored: StoredApprovalRequest): ApprovalRequest => ({
-  id: stored.id,
-  capabilityName: stored.capabilityName,
-  input: stored.input,
-  context: {
-    userId: stored.userId,
-    sessionId: stored.sessionId,
-    traceId: stored.traceId,
-    permissions: new Set(),
-    runtime: {},
-  },
-  riskLevel: stored.riskLevel,
-  requestedAt: stored.requestedAt,
-});
-
 const createFilePersistence = (filePath: string): ApprovalStorePersistence => {
   const ensureParent = async (): Promise<void> => {
     await mkdir(dirname(filePath), { recursive: true });
@@ -100,7 +35,7 @@ const createFilePersistence = (filePath: string): ApprovalStorePersistence => {
     const body = JSON.stringify(
       {
         version: 1,
-        requests: requests.map(serializeStored),
+        requests: requests.map(serializeStoredApproval),
       },
       null,
       2,
@@ -121,12 +56,12 @@ const createFilePersistence = (filePath: string): ApprovalStorePersistence => {
       const trimmed = raw.trim();
       if (!trimmed) return [];
       const parsed = approvalDbSchema.parse(JSON.parse(trimmed));
-      return parsed.requests.map(deserializeStored);
+      return parsed.requests.map(deserializeStoredApproval);
     },
     async save(requests) {
       await flush(requests);
     },
-    toApprovalRequest,
+    toApprovalRequest: storedApprovalToRequest,
   };
 };
 

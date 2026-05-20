@@ -1,4 +1,3 @@
-import { z } from 'zod';
 import type { HikariRedis } from './redis-client.js';
 import type { ApprovalGate, ApprovalRequest, ApprovalResult } from '../../core/approval.js';
 import type {
@@ -6,25 +5,11 @@ import type {
   QueueApprovalGateOptions,
   StoredApprovalRequest,
 } from '../../core/approval-store.js';
-
-const approvalRequestStatusSchema = z.enum(['pending', 'approved', 'rejected']);
-
-const serializedStoredApprovalSchema = z.object({
-  id: z.string(),
-  capabilityName: z.string(),
-  input: z.unknown(),
-  riskLevel: z.string(),
-  requestedAt: z.string(),
-  status: approvalRequestStatusSchema,
-  userId: z.string(),
-  sessionId: z.string(),
-  traceId: z.string(),
-  rejectedReason: z.string().optional(),
-  resolvedBy: z.string().optional(),
-  resolvedAt: z.string().optional(),
-});
-
-type SerializedStoredApproval = z.infer<typeof serializedStoredApprovalSchema>;
+import {
+  serializeStoredApproval,
+  parseSerializedStoredApprovalJson,
+  storedApprovalToResult,
+} from '../approval-serialization.js';
 
 /** `createRedisApprovalStore` のオプション。 */
 export type RedisApprovalStoreOptions = {
@@ -35,52 +20,6 @@ const reqKey = (prefix: string, id: string): string => `${prefix}approval:req:${
 const pendingKey = (prefix: string): string => `${prefix}approval:pending`;
 const signalKey = (prefix: string, id: string): string => `${prefix}approval:signal:${id}`;
 
-const serializeStored = (stored: StoredApprovalRequest): SerializedStoredApproval => ({
-  id: stored.id,
-  capabilityName: stored.capabilityName,
-  input: stored.input,
-  riskLevel: stored.riskLevel,
-  requestedAt: stored.requestedAt.toISOString(),
-  status: stored.status,
-  userId: stored.userId,
-  sessionId: stored.sessionId,
-  traceId: stored.traceId,
-  rejectedReason: stored.rejectedReason,
-  resolvedBy: stored.resolvedBy,
-  resolvedAt: stored.resolvedAt?.toISOString(),
-});
-
-const deserializeStored = (raw: SerializedStoredApproval): StoredApprovalRequest => ({
-  id: raw.id,
-  capabilityName: raw.capabilityName,
-  input: raw.input,
-  riskLevel: raw.riskLevel,
-  requestedAt: new Date(raw.requestedAt),
-  status: raw.status,
-  userId: raw.userId,
-  sessionId: raw.sessionId,
-  traceId: raw.traceId,
-  rejectedReason: raw.rejectedReason,
-  resolvedBy: raw.resolvedBy,
-  resolvedAt: raw.resolvedAt ? new Date(raw.resolvedAt) : undefined,
-});
-
-const storedToResult = (stored: StoredApprovalRequest): ApprovalResult => {
-  if (stored.status === 'approved') {
-    return {
-      approved: true,
-      approvedBy: stored.resolvedBy ?? 'redis',
-      approvedAt: stored.resolvedAt ?? new Date(),
-    };
-  }
-  return {
-    approved: false,
-    rejectedBy: stored.resolvedBy ?? 'redis',
-    rejectedAt: stored.resolvedAt ?? new Date(),
-    reason: stored.rejectedReason,
-  };
-};
-
 const loadStored = async (
   redis: HikariRedis,
   prefix: string,
@@ -89,7 +28,7 @@ const loadStored = async (
   const raw = await redis.get(reqKey(prefix, id));
   if (!raw) return undefined;
   try {
-    return deserializeStored(serializedStoredApprovalSchema.parse(JSON.parse(raw)));
+    return parseSerializedStoredApprovalJson(raw);
   } catch {
     return undefined;
   }
@@ -119,7 +58,7 @@ export const createRedisApprovalStore = (
       sessionId: request.context.sessionId,
       traceId: request.context.traceId,
     };
-    await redis.set(reqKey(prefix, request.id), JSON.stringify(serializeStored(stored)));
+    await redis.set(reqKey(prefix, request.id), JSON.stringify(serializeStoredApproval(stored)));
     await redis.zAdd(pendingKey(prefix), [
       { score: request.requestedAt.getTime(), value: request.id },
     ]);
@@ -142,7 +81,7 @@ export const createRedisApprovalStore = (
       resolvedAt,
       rejectedReason: nextStatus === 'rejected' ? reason : undefined,
     };
-    const payload = JSON.stringify(serializeStored(updated));
+    const payload = JSON.stringify(serializeStoredApproval(updated));
     await redis.set(reqKey(prefix, id), payload);
     await redis.zRem(pendingKey(prefix), id);
     await redis.lPush(signalKey(prefix, id), payload);
@@ -169,8 +108,8 @@ export const createRedisApprovalStore = (
 
     const parseSignal = (raw: string): ApprovalResult | undefined => {
       try {
-        const stored = deserializeStored(serializedStoredApprovalSchema.parse(JSON.parse(raw)));
-        return storedToResult(stored);
+        const stored = parseSerializedStoredApprovalJson(raw);
+        return storedApprovalToResult(stored);
       } catch {
         return undefined;
       }
@@ -187,7 +126,7 @@ export const createRedisApprovalStore = (
       }
       const stored = await loadStored(redis, prefix, id);
       if (stored && stored.status !== 'pending') {
-        return storedToResult(stored);
+        return storedApprovalToResult(stored);
       }
     }
 
@@ -207,7 +146,7 @@ export const createRedisApprovalStore = (
       return async (request: ApprovalRequest): Promise<ApprovalResult> => {
         const existing = await loadStored(redis, prefix, request.id);
         if (existing && existing.status !== 'pending') {
-          return storedToResult(existing);
+          return storedApprovalToResult(existing);
         }
 
         if (!existing) {
@@ -230,7 +169,7 @@ export const createRedisApprovalStore = (
           );
           if (timedOut) {
             const stored = await loadStored(redis, prefix, request.id);
-            if (stored) return storedToResult(stored);
+            if (stored) return storedApprovalToResult(stored);
           }
           return {
             approved: false,
@@ -242,7 +181,7 @@ export const createRedisApprovalStore = (
 
         const stored = await loadStored(redis, prefix, request.id);
         if (stored && stored.status !== 'pending') {
-          return storedToResult(stored);
+          return storedApprovalToResult(stored);
         }
 
         return {
