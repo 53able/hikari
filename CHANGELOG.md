@@ -1,3 +1,5 @@
+## [1.0.1](https://github.com/53able/hikari/compare/v1.0.0...v1.0.1) (2026-05-20)
+
 # [1.0.0](https://github.com/53able/hikari/compare/v0.3.0...v1.0.0) (2026-05-20)
 
 
