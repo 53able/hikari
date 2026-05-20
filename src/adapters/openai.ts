@@ -3,6 +3,7 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { Registry } from '../core/registry.js';
 import type { Engine } from '../core/execution.js';
 import { serializeToolExecutionError } from '../core/tool-error.js';
+import { enrichExecutionOptionsWithIdempotency } from '../core/idempotency-key.js';
 import type { ChatOptions, ChatResult } from './claude.js';
 
 /** OpenAI Chat Completions に渡す会話メッセージ（user / assistant のテキストのみ）。 */
@@ -124,10 +125,16 @@ export const createOpenAiAdapter = (
         }
 
         try {
-          const result = await engine.execute(name, parsedInput, {
-            ...options,
-            intent: options.intent ?? extractLastUserMessage(messages),
-          });
+          const execOptions = enrichExecutionOptionsWithIdempotency(
+            registry,
+            name,
+            {
+              ...options,
+              intent: options.intent ?? extractLastUserMessage(messages),
+            },
+            { toolCallId: toolCall.id },
+          );
+          const result = await engine.execute(name, parsedInput, execOptions);
           traceIds.push(result.traceId);
           conversation.push({
             role: 'tool',

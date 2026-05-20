@@ -3,6 +3,7 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { Registry } from '../core/registry.js';
 import type { Engine, ExecutionOptions } from '../core/execution.js';
 import { serializeToolExecutionError } from '../core/tool-error.js';
+import { enrichExecutionOptionsWithIdempotency } from '../core/idempotency-key.js';
 
 /** Anthropic API への単一チャットターンに渡すオプション。`ExecutionOptions` を継承する。 */
 export interface ChatOptions extends ExecutionOptions {
@@ -102,10 +103,16 @@ export function createClaudeAdapter(
 
       for (const toolUse of toolUseBlocks) {
         try {
-          const result = await engine.execute(toolUse.name, toolUse.input, {
-            ...options,
-            intent: options.intent ?? extractLastUserMessage(messages),
-          });
+          const execOptions = enrichExecutionOptionsWithIdempotency(
+            registry,
+            toolUse.name,
+            {
+              ...options,
+              intent: options.intent ?? extractLastUserMessage(messages),
+            },
+            { toolCallId: toolUse.id },
+          );
+          const result = await engine.execute(toolUse.name, toolUse.input, execOptions);
           traceIds.push(result.traceId);
           toolResults.push({
             type: 'tool_result',

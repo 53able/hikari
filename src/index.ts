@@ -123,6 +123,12 @@ export {
   hashCapabilityInput,
   buildIdempotencyStoreKey,
 } from './core/idempotency-store.js';
+export {
+  buildToolIdempotencyKey,
+  buildInvokerIdempotencyKey,
+  enrichExecutionOptionsWithIdempotency,
+} from './core/idempotency-key.js';
+export type { IdempotencyKeySource } from './core/idempotency-key.js';
 export type { IdempotencyStore, IdempotencyRecord } from './core/idempotency-store.js';
 export {
   createSlidingWindowRateLimiter,

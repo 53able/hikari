@@ -21,6 +21,7 @@ import {
   type HarnessPlanStep,
 } from '../core/harness-plan.js';
 import { loadPrompt } from '../agent/load-prompt.js';
+import { enrichExecutionOptionsWithIdempotency } from '../core/idempotency-key.js';
 
 /** `createHikariAgent` の設定オプション。 */
 export interface HikariAgentOptions {
@@ -130,13 +131,20 @@ export function toAgentTools(
           bindings.resolveIntent?.(toolCallId, cap.name, params) ?? ctx.intent ?? toolCallId;
 
         try {
-          const result = await engine.execute(cap.name, params, {
-            userId: ctx.userId,
-            sessionId: ctx.sessionId,
-            traceId,
-            intent,
-            permissions: ctx.permissions,
-          });
+          const execOptions = enrichExecutionOptionsWithIdempotency(
+            registry,
+            cap.name,
+            {
+              userId: ctx.userId,
+              sessionId: ctx.sessionId,
+              traceId,
+              intent,
+              permissions: ctx.permissions,
+              idempotencyKey: ctx.idempotencyKey,
+            },
+            { toolCallId },
+          );
+          const result = await engine.execute(cap.name, params, execOptions);
           const details: PiToolResultDetails = {
             output: result.output,
             traceId: result.traceId,

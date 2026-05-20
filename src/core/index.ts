@@ -3,6 +3,7 @@ export * from './registry.js';
 export * from './policy.js';
 export * from './audit.js';
 export * from './idempotency-store.js';
+export * from './idempotency-key.js';
 export * from './approval.js';
 export * from './approval-store.js';
 export * from './approval-webhook.js';

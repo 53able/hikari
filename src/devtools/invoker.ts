@@ -5,6 +5,7 @@ import type { AuditLogger, InMemoryStorage } from '../core/audit.js';
 import { createAuditLog, createInMemoryStorage } from '../core/audit.js';
 import { devAutoApprove } from '../core/approval.js';
 import { createEngine, type Engine, type ExecutionResult } from '../core/execution.js';
+import { enrichExecutionOptionsWithIdempotency } from '../core/idempotency-key.js';
 
 /** CLI / 環境変数から解釈した invoke リクエスト。 */
 export const invokeRequestSchema = z.object({
@@ -13,6 +14,7 @@ export const invokeRequestSchema = z.object({
   userId: z.string().min(1),
   permissions: z.array(z.string()),
   intent: z.string().optional(),
+  idempotencyKey: z.string().min(1).max(256).optional(),
 });
 
 export type InvokeRequest = z.infer<typeof invokeRequestSchema>;
@@ -185,14 +187,21 @@ export const createCapabilityInvoker = (
       parsed.intent ?? `capability-invoker ${parsed.capabilityName}`;
 
     try {
-      const result: ExecutionResult = await engine.execute(
+      const execOptions = enrichExecutionOptionsWithIdempotency(
+        options.registry,
         parsed.capabilityName,
-        parsed.input,
         {
           userId: parsed.userId,
           permissions: [...parsed.permissions],
           intent,
+          idempotencyKey: parsed.idempotencyKey,
         },
+        { input: parsed.input },
+      );
+      const result: ExecutionResult = await engine.execute(
+        parsed.capabilityName,
+        parsed.input,
+        execOptions,
       );
 
       return invokeReportSchema.parse({
