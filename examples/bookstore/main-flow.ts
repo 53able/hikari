@@ -105,7 +105,7 @@ const run = async (): Promise<void> => {
   const draft = await engine.execute(
     'email_compose_reminder',
     { invoiceId: first.id, tone: 'polite' },
-    { ...ctx, traceId, intent },
+    { ...ctx, traceId, intent, idempotencyKey: `${traceId}:compose` },
   );
   const draftId = (draft.output as { draftId: string }).draftId;
   console.log('   ', draft.output);
@@ -121,7 +121,7 @@ const run = async (): Promise<void> => {
   const sent = await engine.execute(
     'email_send_reminder',
     { draftId },
-    { ...ctx, traceId, intent },
+    { ...ctx, traceId, intent, idempotencyKey: `${traceId}:send` },
   );
   console.log('   ', sent.output);
   console.log();
