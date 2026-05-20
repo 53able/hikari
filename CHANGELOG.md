@@ -4,6 +4,7 @@
 
 * Bundle default agent prompts under `src/prompts` with `loadPrompt()` for Pi adapter and examples.
 * Require `Idempotency-Key` / `idempotencyKey` for capabilities with `write` or `financial` side effects (`IdempotencyRequiredError`, HTTP 400 `IDEMPOTENCY_REQUIRED`).
+* Auto-assign `idempotencyKey` on Pi, Claude, OpenAI tool calls and devtools invoker when the key is omitted (HTTP still requires an explicit `Idempotency-Key` header).
 
 ### Breaking changes
 

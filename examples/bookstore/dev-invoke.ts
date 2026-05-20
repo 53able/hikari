@@ -5,7 +5,7 @@
  * npx tsx examples/bookstore/dev-invoke.ts --list
  * npx tsx examples/bookstore/dev-invoke.ts list_books
  * npx tsx examples/bookstore/dev-invoke.ts get_book '{"bookId":"1"}'
- * # write/financial は invoker が idempotencyKey 非対応のため main.ts または HTTP を使用
+ * npx tsx examples/bookstore/dev-invoke.ts add_book '{"title":"T","author":"A","price":10,"stock":1}' admin
  * npx tsx examples/bookstore/dev-invoke.ts --entry examples/bookstore/registry.ts list_books
  * ```
  */
