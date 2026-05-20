@@ -2,6 +2,8 @@ import OpenAI from 'openai';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { Registry } from '../core/registry.js';
 import type { Engine } from '../core/execution.js';
+import { serializeToolExecutionError } from '../core/tool-error.js';
+import { enrichExecutionOptionsWithIdempotency } from '../core/idempotency-key.js';
 import type { ChatOptions, ChatResult } from './claude.js';
 
 /** OpenAI Chat Completions に渡す会話メッセージ（user / assistant のテキストのみ）。 */
@@ -45,7 +47,7 @@ export const createOpenAiAdapter = (
   const client = new OpenAI({ apiKey });
 
   const getTools = (): OpenAI.Chat.Completions.ChatCompletionTool[] =>
-    registry.getAll().map((cap) => {
+    registry.listForLlm().map((cap) => {
       const jsonSchema = zodToJsonSchema(cap.inputSchema, { target: 'openApi3' });
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { $schema, ...parameters } = jsonSchema as Record<string, unknown>;
@@ -123,10 +125,16 @@ export const createOpenAiAdapter = (
         }
 
         try {
-          const result = await engine.execute(name, parsedInput, {
-            ...options,
-            intent: options.intent ?? extractLastUserMessage(messages),
-          });
+          const execOptions = enrichExecutionOptionsWithIdempotency(
+            registry,
+            name,
+            {
+              ...options,
+              intent: options.intent ?? extractLastUserMessage(messages),
+            },
+            { toolCallId: toolCall.id },
+          );
+          const result = await engine.execute(name, parsedInput, execOptions);
           traceIds.push(result.traceId);
           conversation.push({
             role: 'tool',
@@ -137,7 +145,7 @@ export const createOpenAiAdapter = (
           conversation.push({
             role: 'tool',
             tool_call_id: toolCall.id,
-            content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+            content: serializeToolExecutionError(err),
           });
         }
       }

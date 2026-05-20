@@ -4,6 +4,10 @@ import { Agent, type AgentTool, type AgentOptions, type AgentMessage } from '@ea
 import { streamSimple, getModel, type Model, type Usage } from '@earendil-works/pi-ai';
 import type { TSchema } from 'typebox';
 import type { Registry } from '../core/registry.js';
+import {
+  formatToolExecutionError,
+  type ToolExecutionErrorPayload,
+} from '../core/tool-error.js';
 import type { CapabilityRuntime } from '../core/capability.js';
 import type { Engine, ExecutionOptions } from '../core/execution.js';
 import { createEngine } from '../core/execution.js';
@@ -16,6 +20,8 @@ import {
   harnessPlanStepsMetadata,
   type HarnessPlanStep,
 } from '../core/harness-plan.js';
+import { loadPrompt } from '../agent/load-prompt.js';
+import { enrichExecutionOptionsWithIdempotency } from '../core/idempotency-key.js';
 
 /** `createHikariAgent` の設定オプション。 */
 export interface HikariAgentOptions {
@@ -53,7 +59,7 @@ export type PiToolBindings = {
 export type PiToolResultDetails = {
   output?: unknown;
   traceId: string;
-  error?: string;
+  error?: ToolExecutionErrorPayload;
 };
 
 const EMPTY_USAGE: Usage = {
@@ -108,7 +114,7 @@ export function toAgentTools(
   engine: Engine,
   bindings: PiToolBindings,
 ): AgentTool[] {
-  return registry.getAll().map((cap): AgentTool => {
+  return registry.listForLlm().map((cap): AgentTool => {
     const jsonSchema = zodToJsonSchema(cap.inputSchema, { target: 'openApi3' });
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { $schema, ...parameters } = jsonSchema as Record<string, unknown>;
@@ -125,13 +131,20 @@ export function toAgentTools(
           bindings.resolveIntent?.(toolCallId, cap.name, params) ?? ctx.intent ?? toolCallId;
 
         try {
-          const result = await engine.execute(cap.name, params, {
-            userId: ctx.userId,
-            sessionId: ctx.sessionId,
-            traceId,
-            intent,
-            permissions: ctx.permissions,
-          });
+          const execOptions = enrichExecutionOptionsWithIdempotency(
+            registry,
+            cap.name,
+            {
+              userId: ctx.userId,
+              sessionId: ctx.sessionId,
+              traceId,
+              intent,
+              permissions: ctx.permissions,
+              idempotencyKey: ctx.idempotencyKey,
+            },
+            { toolCallId },
+          );
+          const result = await engine.execute(cap.name, params, execOptions);
           const details: PiToolResultDetails = {
             output: result.output,
             traceId: result.traceId,
@@ -141,8 +154,16 @@ export function toAgentTools(
             details,
           };
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          throw new Error(message);
+          const errorPayload = formatToolExecutionError(err);
+          const details: PiToolResultDetails = {
+            traceId,
+            error: errorPayload,
+          };
+          return {
+            content: [{ type: 'text', text: JSON.stringify(errorPayload) }],
+            details,
+            isError: true,
+          };
         }
       },
     };
@@ -165,7 +186,7 @@ export function createHikariAgent(
 ): HikariAgent {
   const {
     modelId = 'claude-sonnet-4-6',
-    systemPrompt = 'You are a helpful assistant with access to registered capabilities.',
+    systemPrompt = loadPrompt('default-agent'),
     apiKey,
     harness,
     agentOptions = {},

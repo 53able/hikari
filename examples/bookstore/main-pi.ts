@@ -4,6 +4,7 @@ import {
   createInMemoryStorage,
   devAutoApprove,
 } from '../../src/index.js';
+import { loadPrompt } from '../../src/agent/load-prompt.js';
 import { createHikariHarness } from '../../src/pi.js';
 import {
   listBooks,
@@ -31,7 +32,7 @@ const { agent, runTurn } = createHikariHarness({
   runtime: bookstoreRuntime,
   planPrefix: 'Answer using bookstore capabilities',
   agentOptions: {
-    systemPrompt: 'You are a helpful bookstore assistant. Use available tools to answer questions.',
+    systemPrompt: loadPrompt('bookstore-assistant'),
   },
 });
 

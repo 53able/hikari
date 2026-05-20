@@ -71,6 +71,7 @@ async function run() {
       userId: 'user-alice',
       permissions: ['purchase'],
       intent: 'Buy 2 copies of Clean Code',
+      idempotencyKey: 'example-main-purchase',
     });
     console.log('  ', purchase.output);
   } catch (err) {
@@ -78,15 +79,22 @@ async function run() {
   }
   console.log();
 
-  // 4. Try without permission (should throw PolicyViolationError)
+  // 4. Try without permission (idempotencyKey present → PolicyViolationError, not IdempotencyRequiredError)
   console.log('4. Attempting delete without admin permission…');
   try {
     await engine.execute('delete_book', { bookId: '3' }, {
       userId: 'user-alice',
       permissions: [],
+      idempotencyKey: 'example-main-delete-denied',
     });
   } catch (err) {
-    console.log('  Expected error:', err instanceof Error ? err.message : err);
+    const label =
+      err instanceof Error && err.name === 'PolicyViolationError'
+        ? `PolicyViolationError: ${err.message}`
+        : err instanceof Error
+          ? `${err.name}: ${err.message}`
+          : String(err);
+    console.log('  Expected error:', label);
   }
   console.log();
 

@@ -115,6 +115,7 @@ export {
   executionOptionsSchema,
   normalizeExecutionOptions,
   IdempotencyConflictError,
+  IdempotencyRequiredError,
 } from './core/execution.js';
 export type { NormalizedExecutionOptions } from './core/execution.js';
 export {
@@ -122,6 +123,12 @@ export {
   hashCapabilityInput,
   buildIdempotencyStoreKey,
 } from './core/idempotency-store.js';
+export {
+  buildToolIdempotencyKey,
+  buildInvokerIdempotencyKey,
+  enrichExecutionOptionsWithIdempotency,
+} from './core/idempotency-key.js';
+export type { IdempotencyKeySource } from './core/idempotency-key.js';
 export type { IdempotencyStore, IdempotencyRecord } from './core/idempotency-store.js';
 export {
   createSlidingWindowRateLimiter,

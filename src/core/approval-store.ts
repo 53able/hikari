@@ -89,6 +89,8 @@ export type ApprovalStore = {
   readonly whenPersisted?: () => Promise<void>;
   /**
    * 外部プロセスが更新したスナップショットを取り込み、pending ゲートの待機を解決する。
+   * プロセス再起動後の承認再開（resume）に使う: 永続化ストアがディスク上の approved/rejected を
+   * 読み込んだあと、このメソッドでブロック中の `createGate` 呼び出しを解放する。
    * ファイル永続化ストアの watch / poll から呼ぶ。
    */
   readonly syncFromSnapshot?: (requests: readonly StoredApprovalRequest[]) => void;

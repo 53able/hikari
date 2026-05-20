@@ -145,13 +145,14 @@ curl -s -X POST http://localhost:3100/api/capabilities/list_books \
   -d '{}' | jq
 ```
 
-購入（`purchase` 権限が必要）:
+購入（`purchase` 権限が必要。`write` / `financial` では `Idempotency-Key` ヘッダが必須）:
 
 ```bash
 curl -s -X POST http://localhost:3100/api/capabilities/purchase_book \
   -H 'Content-Type: application/json' \
   -H 'x-hikari-user-id: user-alice' \
   -H 'x-hikari-permissions: purchase' \
+  -H 'Idempotency-Key: demo-purchase-1' \
   -d '{"bookId":"1","quantity":1}' | jq
 ```
 

@@ -30,12 +30,26 @@ const adminOnly = defineCapability({
   },
 });
 
+const writeCap = defineCapability({
+  name: 'write_cap',
+  description: 'Write side effect',
+  inputSchema: z.object({ value: z.string() }),
+  outputSchema: z.object({ result: z.string() }),
+  policy: { requiredPermissions: [], sideEffects: ['write'], auditLevel: 'basic' },
+  async handler({ value }) {
+    return { result: value };
+  },
+});
+
 describe('createCapabilityInvoker', () => {
-  const registry = createRegistry().register(echo).register(adminOnly);
+  const registry = createRegistry()
+    .register(echo)
+    .register(adminOnly)
+    .register(writeCap);
   const invoker = createCapabilityInvoker({ registry, userId: 'tester' });
 
   it('lists capability names', () => {
-    expect(invoker.listCapabilityNames()).toEqual(['echo', 'admin_only']);
+    expect(invoker.listCapabilityNames()).toEqual(['echo', 'admin_only', 'write_cap']);
   });
 
   it('formats capability list as text', () => {
@@ -76,6 +90,29 @@ describe('createCapabilityInvoker', () => {
     });
     expect(report.ok).toBe(false);
     expect(report.error?.name).toBe('PolicyViolationError');
+  });
+
+  it('auto-assigns idempotencyKey for write capabilities', async () => {
+    const report = await invoker.invoke({
+      capabilityName: 'write_cap',
+      input: { value: 'persist' },
+      userId: 'tester',
+      permissions: [],
+    });
+    expect(report.ok).toBe(true);
+    expect(report.error?.name).not.toBe('IdempotencyRequiredError');
+    expect(report.result?.output).toEqual({ result: 'persist' });
+  });
+
+  it('uses explicit idempotencyKey when provided', async () => {
+    const report = await invoker.invoke({
+      capabilityName: 'write_cap',
+      input: { value: 'fixed' },
+      userId: 'tester',
+      permissions: [],
+      idempotencyKey: 'manual-invoke-key',
+    });
+    expect(report.ok).toBe(true);
   });
 });
 

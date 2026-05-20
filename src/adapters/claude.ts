@@ -2,6 +2,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { Registry } from '../core/registry.js';
 import type { Engine, ExecutionOptions } from '../core/execution.js';
+import { serializeToolExecutionError } from '../core/tool-error.js';
+import { enrichExecutionOptionsWithIdempotency } from '../core/idempotency-key.js';
 
 /** Anthropic API への単一チャットターンに渡すオプション。`ExecutionOptions` を継承する。 */
 export interface ChatOptions extends ExecutionOptions {
@@ -54,7 +56,7 @@ export function createClaudeAdapter(
   const client = new Anthropic({ apiKey });
 
   const getTools = (): Anthropic.Tool[] =>
-    registry.getAll().map((cap) => {
+    registry.listForLlm().map((cap) => {
       const jsonSchema = zodToJsonSchema(cap.inputSchema, { target: 'openApi3' });
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { $schema, ...inputSchema } = jsonSchema as Record<string, unknown>;
@@ -101,10 +103,16 @@ export function createClaudeAdapter(
 
       for (const toolUse of toolUseBlocks) {
         try {
-          const result = await engine.execute(toolUse.name, toolUse.input, {
-            ...options,
-            intent: options.intent ?? extractLastUserMessage(messages),
-          });
+          const execOptions = enrichExecutionOptionsWithIdempotency(
+            registry,
+            toolUse.name,
+            {
+              ...options,
+              intent: options.intent ?? extractLastUserMessage(messages),
+            },
+            { toolCallId: toolUse.id },
+          );
+          const result = await engine.execute(toolUse.name, toolUse.input, execOptions);
           traceIds.push(result.traceId);
           toolResults.push({
             type: 'tool_result',
@@ -115,7 +123,7 @@ export function createClaudeAdapter(
           toolResults.push({
             type: 'tool_result',
             tool_use_id: toolUse.id,
-            content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+            content: serializeToolExecutionError(err),
             is_error: true,
           });
         }

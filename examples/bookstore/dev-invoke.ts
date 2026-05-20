@@ -4,13 +4,44 @@
  * ```bash
  * npx tsx examples/bookstore/dev-invoke.ts --list
  * npx tsx examples/bookstore/dev-invoke.ts list_books
- * npx tsx examples/bookstore/dev-invoke.ts purchase_book '{"bookId":"1","quantity":1}' purchase
+ * npx tsx examples/bookstore/dev-invoke.ts get_book '{"bookId":"1"}'
+ * npx tsx examples/bookstore/dev-invoke.ts add_book '{"title":"T","author":"A","price":10,"stock":1}' admin
  * npx tsx examples/bookstore/dev-invoke.ts --entry examples/bookstore/registry.ts list_books
  * ```
  */
 import { createCapabilityInvoker, runInvokeCli } from '../../src/devtools/invoker.js';
+import {
+  createEngine,
+  createAuditLog,
+  createInMemoryStorage,
+  devAutoApprove,
+} from '../../src/index.js';
+import type { CapabilityRuntime } from '../../src/core/capability.js';
+import type { Registry } from '../../src/core/registry.js';
 import { loadRegistryFrom } from '../../src/cli/loader.js';
-import { registry as bookstoreRegistry } from './registry.js';
+import {
+  registry as bookstoreRegistry,
+  runtime as bookstoreRuntime,
+} from './registry.js';
+
+const createInvokerForRegistry = (
+  registry: Registry,
+  runtime?: CapabilityRuntime,
+) => {
+  const storage = createInMemoryStorage();
+  const auditLog = createAuditLog(storage);
+  return createCapabilityInvoker({
+    registry,
+    storage,
+    auditLog,
+    engine: createEngine({
+      registry,
+      auditLog,
+      approvalGate: devAutoApprove,
+      ...(runtime ? { runtime } : {}),
+    }),
+  });
+};
 
 const DEFAULT_ENTRY = 'examples/bookstore/registry.ts';
 
@@ -29,11 +60,14 @@ const stripEntryFlag = (
 const resolveInvoker = async (argv: readonly string[]) => {
   const { entry, rest } = stripEntryFlag(argv);
   if (entry) {
-    const { registry } = await loadRegistryFrom(entry);
-    return { invoker: createCapabilityInvoker({ registry }), argv: rest };
+    const { registry, runtime } = await loadRegistryFrom(entry);
+    return {
+      invoker: createInvokerForRegistry(registry, runtime),
+      argv: rest,
+    };
   }
   return {
-    invoker: createCapabilityInvoker({ registry: bookstoreRegistry }),
+    invoker: createInvokerForRegistry(bookstoreRegistry, bookstoreRuntime),
     argv: rest,
   };
 };

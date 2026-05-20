@@ -78,7 +78,7 @@ describe('toAgentTools', () => {
     expect(traceIdFromPiToolResult(result)).toBe('trace-fixed');
   });
 
-  it('throws on engine failure so Pi marks the tool result as error', async () => {
+  it('returns structured error when engine fails', async () => {
     const registry = createRegistry().register(echo);
     const engine: Engine = {
       execute: vi.fn().mockRejectedValue(new Error('policy denied')),
@@ -88,7 +88,12 @@ describe('toAgentTools', () => {
       getContext: () => ({ userId: 'u1', traceId: 't1' }),
     });
 
-    await expect(tools[0]!.execute('call-2', { value: 'x' })).rejects.toThrow('policy denied');
+    const result = await tools[0]!.execute('call-2', { value: 'x' });
+    expect(result.isError).toBe(true);
+    expect(result.details).toMatchObject({
+      traceId: 't1',
+      error: { code: 'execution_error', message: 'policy denied', retryable: false },
+    });
   });
 
   it('uses engine traceId from execute result in tool details', async () => {
