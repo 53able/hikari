@@ -19,7 +19,13 @@ export type CapabilityMeta = {
   };
 };
 
-const zodToOpenApi = (schema: Capability['inputSchema']): Record<string, unknown> => {
+/**
+ * Zod スキーマを OpenAPI 3 互換 JSON Schema に変換する（`$schema` を除去）。
+ * LLM ツール定義・OpenAPI エクスポートで共有する。
+ */
+export const capabilitySchemaToJson = (
+  schema: Capability['inputSchema'],
+): Record<string, unknown> => {
   const jsonSchema = zodToJsonSchema(schema, { target: 'openApi3' });
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { $schema, ...rest } = jsonSchema as Record<string, unknown>;
@@ -32,8 +38,8 @@ const zodToOpenApi = (schema: Capability['inputSchema']): Record<string, unknown
 export const buildCapabilityMeta = (cap: Capability): CapabilityMeta => ({
   name: cap.name,
   description: cap.description,
-  inputSchema: zodToOpenApi(cap.inputSchema),
-  outputSchema: zodToOpenApi(cap.outputSchema),
+  inputSchema: capabilitySchemaToJson(cap.inputSchema),
+  outputSchema: capabilitySchemaToJson(cap.outputSchema),
   policy: {
     requiredPermissions: cap.policy.requiredPermissions,
     sideEffects: cap.policy.sideEffects,

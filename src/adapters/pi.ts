@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { capabilitySchemaToJson } from '../core/cap-meta.js';
 import { Agent, type AgentTool, type AgentOptions, type AgentMessage } from '@earendil-works/pi-agent-core';
 import { streamSimple, getModel, type Model, type Usage } from '@earendil-works/pi-ai';
 import type { TSchema } from 'typebox';
@@ -114,16 +114,11 @@ export function toAgentTools(
   engine: Engine,
   bindings: PiToolBindings,
 ): AgentTool[] {
-  return registry.listForLlm().map((cap): AgentTool => {
-    const jsonSchema = zodToJsonSchema(cap.inputSchema, { target: 'openApi3' });
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { $schema, ...parameters } = jsonSchema as Record<string, unknown>;
-
-    return {
+  return registry.listForLlm().map((cap): AgentTool => ({
       name: cap.name,
       description: cap.description,
       label: cap.name,
-      parameters: parameters as unknown as TSchema,
+      parameters: capabilitySchemaToJson(cap.inputSchema) as unknown as TSchema,
       execute: async (toolCallId, params) => {
         const ctx = bindings.getContext();
         const traceId = ctx.traceId ?? toolCallId;
@@ -166,8 +161,7 @@ export function toAgentTools(
           };
         }
       },
-    };
-  });
+  }));
 }
 
 /**
