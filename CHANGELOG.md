@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/53able/hikari/compare/v1.0.1...v1.1.0) (2026-05-20)
+
+
+### Features
+
+* unify Pi agent turns via runPiAgentTurn ([#17](https://github.com/53able/hikari/issues/17)) ([e42fe2a](https://github.com/53able/hikari/commit/e42fe2a8bcf17f7dd8212dc3564a90a75ca91740))
+
 ## [1.0.1](https://github.com/53able/hikari/compare/v1.0.0...v1.0.1) (2026-05-20)
 
 # [1.0.0](https://github.com/53able/hikari/compare/v0.3.0...v1.0.0) (2026-05-20)
