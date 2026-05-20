@@ -51,4 +51,26 @@ describe('createRegistry', () => {
     const returned = registry.register(makeCapability('a'));
     expect(returned).toBe(registry);
   });
+
+  it('listForLlm excludes capabilities with exposeToLlm false', () => {
+    const hidden = defineCapability({
+      name: 'hidden',
+      description: 'HTTP only',
+      inputSchema: z.object({}),
+      outputSchema: z.object({}),
+      policy: {
+        requiredPermissions: [],
+        sideEffects: ['read'],
+        auditLevel: 'basic',
+        exposeToLlm: false,
+      },
+      async handler() {
+        return {};
+      },
+    });
+    const registry = createRegistry();
+    registry.register(makeCapability('visible')).register(hidden);
+    expect(registry.listForLlm().map((c) => c.name)).toEqual(['visible']);
+    expect(registry.getAll()).toHaveLength(2);
+  });
 });

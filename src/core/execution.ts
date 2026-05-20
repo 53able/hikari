@@ -81,15 +81,34 @@ export class IdempotencyConflictError extends Error {
   }
 }
 
-/** ハンドラー呼び出し前に入力値が Zod スキーマのパースに失敗したときにスローされる。HTTPアダプターは HTTP 400 にマップする。 */
+/**
+ * `write` / `financial` 副作用のケイパビリティで `idempotencyKey` が欠落しているときにスローされる。
+ * HTTP アダプターは HTTP 400 にマップする。
+ */
+export class IdempotencyRequiredError extends Error {
+  constructor(capabilityName: string) {
+    super(
+      `Capability '${capabilityName}' requires an Idempotency-Key for write or financial operations`,
+    );
+    this.name = 'IdempotencyRequiredError';
+  }
+}
+
+/** 入力または出力の Zod バリデーション失敗時にスローされる。HTTPアダプターは HTTP 400 にマップする。 */
 export class ValidationError extends Error {
   constructor(
     /** フィールドパスとメッセージを含む Zod のバリデーションエラー詳細。 */
     public readonly issues: { message: string; path: (string | number)[] }[],
     /** バリデーションに失敗したケイパビリティ名。 */
     capabilityName: string,
+    /** 失敗した段階。省略時は `input`。 */
+    public readonly phase: 'input' | 'output' = 'input',
   ) {
-    super(`Input validation failed for '${capabilityName}'`);
+    super(
+      phase === 'output'
+        ? `Output validation failed for '${capabilityName}'`
+        : `Input validation failed for '${capabilityName}'`,
+    );
     this.name = 'ValidationError';
   }
 }
@@ -216,6 +235,11 @@ async function runCapability<T>(
 ): Promise<ExecutionResult<T>> {
   const capability = registry.get(capabilityName);
   if (!capability) throw new CapabilityNotFoundError(capabilityName);
+
+  const effectivePolicyForIdempotency = resolveEffectivePolicy(capability.policy);
+  if (effectivePolicyForIdempotency.requiresIdempotencyKey && !options.idempotencyKey) {
+    throw new IdempotencyRequiredError(capabilityName);
+  }
 
   const inputHash = hashCapabilityInput(input);
   if (options.idempotencyKey && idempotencyStore) {
@@ -350,7 +374,21 @@ async function runCapability<T>(
 
   // Execute handler
   try {
-    const output = await capability.handler(parseResult.data, context);
+    const rawOutput = await capability.handler(parseResult.data, context);
+    const outputParse = capability.outputSchema.safeParse(rawOutput);
+    if (!outputParse.success) {
+      await recordAudit(
+        auditLog,
+        capability,
+        'execution_failed',
+        capabilityName,
+        context,
+        effectivePolicyWithInput.auditLevel,
+        { input: parseResult.data, error: 'Output validation failed' },
+      );
+      throw new ValidationError(outputParse.error.issues, capabilityName, 'output');
+    }
+    const validatedOutput = outputParse.data;
     await recordAudit(
       auditLog,
       capability,
@@ -358,11 +396,11 @@ async function runCapability<T>(
       capabilityName,
       context,
       effectivePolicyWithInput.auditLevel,
-      { input: parseResult.data, output },
+      { input: parseResult.data, output: validatedOutput },
     );
     const result: ExecutionResult<T> = {
       success: true,
-      output: output as T,
+      output: validatedOutput as T,
       traceId: context.traceId,
     };
     if (options.idempotencyKey && idempotencyStore) {

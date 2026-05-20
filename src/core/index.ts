@@ -10,6 +10,7 @@ export * from './openapi-export.js';
 export * from './rate-limit.js';
 export * from './approval-webhook-queue.js';
 export * from './execution.js';
+export * from './tool-error.js';
 export * from './cap-meta.js';
 export * from './audit-scrub.js';
 export * from './harness-plan.js';

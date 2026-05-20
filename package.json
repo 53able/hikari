@@ -72,7 +72,7 @@
     "bin"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp -R src/prompts dist/prompts",
     "dev": "tsc --watch",
     "prepublishOnly": "npm run build",
     "test": "vitest run",

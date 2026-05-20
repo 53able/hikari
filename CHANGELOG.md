@@ -1,3 +1,14 @@
+# Unreleased
+
+### Features
+
+* Bundle default agent prompts under `src/prompts` with `loadPrompt()` for Pi adapter and examples.
+* Require `Idempotency-Key` / `idempotencyKey` for capabilities with `write` or `financial` side effects (`IdempotencyRequiredError`, HTTP 400 `IDEMPOTENCY_REQUIRED`).
+
+### Breaking changes
+
+* `engine.execute` and HTTP POST for write/financial capabilities now reject requests without an idempotency key.
+
 # [0.3.0](https://github.com/53able/hikari/compare/v0.2.1...v0.3.0) (2026-05-18)
 
 

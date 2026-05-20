@@ -1,5 +1,6 @@
 import type { ZodTypeAny } from 'zod';
 import type { Capability } from './capability.js';
+import { isExposedToLlm } from './policy.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyCapability = Capability<any, any>;
@@ -22,6 +23,8 @@ export type Registry = {
   readonly get: (name: string) => AnyCapability | undefined;
   /** 登録済みの全ケイパビリティを登録順で返す。 */
   readonly getAll: () => AnyCapability[];
+  /** LLM ツール定義用（`exposeToLlm: false` を除く）。 */
+  readonly listForLlm: () => AnyCapability[];
   /** 登録済みのケイパビリティ名をすべて登録順で返す。 */
   readonly list: () => string[];
 };
@@ -49,6 +52,7 @@ export function createRegistry(): Registry {
     },
     get: (name) => store.get(name),
     getAll: () => [...store.values()],
+    listForLlm: () => [...store.values()].filter((cap) => isExposedToLlm(cap.policy)),
     list: () => [...store.keys()],
   };
 

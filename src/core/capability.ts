@@ -27,6 +27,11 @@ export interface Policy {
   requiresApprovalWhen?: ApprovalPredicate;
   /** 監査ログへの記録詳細度。`none`: 記録なし、`basic`: イベントのみ、`full`: 入出力ペイロードを含む。 */
   auditLevel: 'none' | 'basic' | 'full';
+  /**
+   * LLM ツール定義に含めるか。省略時は `true`。
+   * HTTP / OpenAPI は常に全ケイパビリティを公開する。
+   */
+  exposeToLlm?: boolean;
 }
 
 /** ケイパビリティハンドラーに注入されるランタイムコンテキスト。エンジンが `ExecutionOptions` から生成する。 */

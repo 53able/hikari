@@ -159,6 +159,7 @@ describe('examples/hono-bookstore', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Idempotency-Key': 'hono-test-add-book',
         cookie,
       },
       body: JSON.stringify({

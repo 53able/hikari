@@ -1,5 +1,8 @@
 import type { ApprovalPredicate, ExecutionContext, Policy, SideEffectType } from './capability.js';
 
+/** LLM ツールとして公開するか（省略時は公開）。 */
+export const isExposedToLlm = (policy: Policy): boolean => policy.exposeToLlm !== false;
+
 /** 呼び出し元が必要な権限を持っていないときにスローされる。HTTPアダプターは HTTP 403 にマップする。 */
 export class PolicyViolationError extends Error {
   constructor(
@@ -86,6 +89,8 @@ export type EffectivePolicy = {
   readonly requiresApproval: boolean;
   /** `sideEffects` に `external` が含まれる場合は `true`（レート制限必須）。 */
   readonly requiresRateLimit: boolean;
+  /** `sideEffects` に `write` または `financial` が含まれる場合は `true`（冪等キー必須）。 */
+  readonly requiresIdempotencyKey: boolean;
 };
 
 /**
@@ -104,11 +109,16 @@ export const resolveEffectivePolicy = (
   const auditLevel =
     hasElevatedSideEffect && policy.auditLevel === 'basic' ? 'full' : policy.auditLevel;
 
+  const requiresIdempotencyKey = policy.sideEffects.some(
+    (effect) => effect === 'write' || effect === 'financial',
+  );
+
   return {
     policy,
     auditLevel,
     requiresApproval: needsHumanApproval(policy, input),
     requiresRateLimit: policy.sideEffects.includes('external'),
+    requiresIdempotencyKey,
   };
 };
 

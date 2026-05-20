@@ -9,6 +9,7 @@ import {
   autoApprove,
   createInMemoryIdempotencyStore,
   IdempotencyConflictError,
+  IdempotencyRequiredError,
 } from '../src/index.js';
 
 const createCounterCap = () =>
@@ -49,7 +50,7 @@ describe('idempotency', () => {
     expect(second.traceId).toBe(first.traceId);
   });
 
-  it('executes again when idempotency key is omitted', async () => {
+  it('throws IdempotencyRequiredError when write capability omits idempotency key', async () => {
     const registry = createRegistry().register(createCounterCap());
     const engine = createEngine({
       registry,
@@ -58,8 +59,22 @@ describe('idempotency', () => {
       idempotencyStore: createInMemoryIdempotencyStore(),
     });
 
-    const a = await engine.execute('counter', {}, { userId: 'u1' });
-    const b = await engine.execute('counter', {}, { userId: 'u1' });
+    await expect(engine.execute('counter', {}, { userId: 'u1' })).rejects.toThrow(
+      IdempotencyRequiredError,
+    );
+  });
+
+  it('executes write capability when idempotency key is provided', async () => {
+    const registry = createRegistry().register(createCounterCap());
+    const engine = createEngine({
+      registry,
+      auditLog: createAuditLog(createInMemoryStorage()),
+      approvalGate: autoApprove,
+      idempotencyStore: createInMemoryIdempotencyStore(),
+    });
+
+    const a = await engine.execute('counter', {}, { userId: 'u1', idempotencyKey: 'k-a' });
+    const b = await engine.execute('counter', {}, { userId: 'u1', idempotencyKey: 'k-b' });
     expect(a.output).toEqual({ n: 1 });
     expect(b.output).toEqual({ n: 2 });
   });

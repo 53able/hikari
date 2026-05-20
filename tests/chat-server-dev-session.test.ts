@@ -87,6 +87,7 @@ describe('createChatServer dev-session parity', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Idempotency-Key': 'chat-test-add-book',
         cookie,
       },
       body: JSON.stringify({

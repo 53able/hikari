@@ -115,6 +115,7 @@ export {
   executionOptionsSchema,
   normalizeExecutionOptions,
   IdempotencyConflictError,
+  IdempotencyRequiredError,
 } from './core/execution.js';
 export type { NormalizedExecutionOptions } from './core/execution.js';
 export {

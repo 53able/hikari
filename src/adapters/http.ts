@@ -4,6 +4,7 @@ import {
   CapabilityNotFoundError,
   ValidationError,
   IdempotencyConflictError,
+  IdempotencyRequiredError,
 } from '../core/execution.js';
 import { PolicyViolationError } from '../core/policy.js';
 import { ApprovalDeniedError } from '../core/approval.js';
@@ -144,6 +145,12 @@ const errorToResponse = (err: unknown): { status: number; body: unknown } => {
     return {
       status: 409,
       body: { error: { code: 'IDEMPOTENCY_CONFLICT', message: err.message } },
+    };
+  }
+  if (err instanceof IdempotencyRequiredError) {
+    return {
+      status: 400,
+      body: { error: { code: 'IDEMPOTENCY_REQUIRED', message: err.message } },
     };
   }
   const message = err instanceof Error ? err.message : 'Internal server error';

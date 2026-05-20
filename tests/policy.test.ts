@@ -46,4 +46,16 @@ describe('resolveEffectivePolicy', () => {
     const effective = resolveEffectivePolicy(basePolicy({ sideEffects: ['external'] }));
     expect(effective.requiresRateLimit).toBe(true);
   });
+
+  it('requires idempotency key for write and financial side effects', () => {
+    expect(resolveEffectivePolicy(basePolicy({ sideEffects: ['read'] })).requiresIdempotencyKey).toBe(
+      false,
+    );
+    expect(resolveEffectivePolicy(basePolicy({ sideEffects: ['write'] })).requiresIdempotencyKey).toBe(
+      true,
+    );
+    expect(
+      resolveEffectivePolicy(basePolicy({ sideEffects: ['financial'] })).requiresIdempotencyKey,
+    ).toBe(true);
+  });
 });

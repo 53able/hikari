@@ -115,7 +115,10 @@ describe('createEngine / execute', () => {
     const { registry, storage, engine } = makeEngine(gate);
     registry.register(financialCapability);
 
-    const result = await engine.execute('pay', { amount: 100 }, { userId: 'u1' });
+    const result = await engine.execute('pay', { amount: 100 }, {
+      userId: 'u1',
+      idempotencyKey: 'pay-approval-test',
+    });
     expect(result.output).toEqual({ success: true });
     expect(gate).toHaveBeenCalledOnce();
 
@@ -135,7 +138,7 @@ describe('createEngine / execute', () => {
     registry.register(financialCapability);
 
     await expect(
-      engine.execute('pay', { amount: 100 }, { userId: 'u1' }),
+      engine.execute('pay', { amount: 100 }, { userId: 'u1', idempotencyKey: 'pay-denied-test' }),
     ).rejects.toThrow(ApprovalDeniedError);
   });
 
@@ -143,7 +146,7 @@ describe('createEngine / execute', () => {
     const { registry, engine } = makeEngine(); // no gate
     registry.register(financialCapability);
     await expect(
-      engine.execute('pay', { amount: 100 }, { userId: 'u1' }),
+      engine.execute('pay', { amount: 100 }, { userId: 'u1', idempotencyKey: 'pay-no-gate' }),
     ).rejects.toThrow('no ApprovalGate is configured');
   });
 
@@ -180,10 +183,10 @@ describe('createEngine / execute', () => {
     const { registry, engine } = makeEngine(gate);
     registry.register(conditional);
 
-    await engine.execute('charge', { amount: 100 }, { userId: 'u1' });
+    await engine.execute('charge', { amount: 100 }, { userId: 'u1', idempotencyKey: 'charge-100' });
     expect(gate).not.toHaveBeenCalled();
 
-    await engine.execute('charge', { amount: 5000 }, { userId: 'u1' });
+    await engine.execute('charge', { amount: 5000 }, { userId: 'u1', idempotencyKey: 'charge-5k' });
     expect(gate).toHaveBeenCalledOnce();
   });
 
@@ -194,5 +197,26 @@ describe('createEngine / execute', () => {
     await engine.execute('echo', { value: 'x' }, { userId: 'u1', traceId });
     const entries = storage.getAll();
     expect(entries.every((e) => e.traceId === traceId)).toBe(true);
+  });
+
+  it('throws ValidationError when handler output fails outputSchema', async () => {
+    const badOutput = defineCapability({
+      name: 'bad_output',
+      description: 'Returns invalid output shape',
+      inputSchema: z.object({}),
+      outputSchema: z.object({ ok: z.boolean() }),
+      policy: { requiredPermissions: [], sideEffects: ['read'], auditLevel: 'basic' },
+      async handler() {
+        return { ok: 'not-a-boolean' as unknown as boolean };
+      },
+    });
+    const { registry, storage, engine } = makeEngine();
+    registry.register(badOutput);
+    await expect(engine.execute('bad_output', {}, { userId: 'u1' })).rejects.toMatchObject({
+      name: 'ValidationError',
+      phase: 'output',
+    });
+    expect(storage.getAll().some((e) => e.type === 'execution_failed')).toBe(true);
+    expect(storage.getAll().some((e) => e.type === 'execution_succeeded')).toBe(false);
   });
 });

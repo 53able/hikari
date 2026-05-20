@@ -103,6 +103,38 @@ export const serveCommand: CliCommand = async (ctx, args) => {
       || approvalFilePath !== undefined
       || useApprovalRedis;
 
+    const { needsHumanApproval } = await import('../../core/policy.js');
+    const hasApprovalCapabilities = registry.getAll().some((cap) =>
+      needsHumanApproval(cap.policy),
+    );
+
+    if (!queueMode && hasApprovalCapabilities) {
+      const allowDevApproval = process.env.HIKARI_ALLOW_DEV_APPROVAL === '1';
+      if (!allowDevApproval) {
+        ctx.stderr.write(
+          'Refusing to start: registry includes capabilities that require human approval, but approval queue mode is off.\n',
+        );
+        ctx.stderr.write(
+          'Use --approval-queue, --approval-file, --approval-redis, or set HIKARI_ALLOW_DEV_APPROVAL=1 for devAutoApprove (development only).\n',
+        );
+        return 1;
+      }
+      ctx.stderr.write(
+        'Warning: using devAutoApprove because HIKARI_ALLOW_DEV_APPROVAL=1 (not for staging/production).\n',
+      );
+    }
+
+    if (!auditFilePath) {
+      ctx.stderr.write(
+        'Note: audit log is in-memory only; use --audit-file <path> to persist traces across restarts.\n',
+      );
+    }
+    if (queueMode && !approvalFilePath && !useApprovalRedis) {
+      ctx.stderr.write(
+        'Note: approval queue is in-memory; pending requests are lost on restart. Use --approval-file or --approval-redis.\n',
+      );
+    }
+
     const approvalNotifiers = new Map<string, (req: ApprovalRequest) => void>();
     const approvalStore = useApprovalRedis && redis
       ? createRedisApprovalStore(redis)
@@ -206,6 +238,11 @@ export const serveCommand: CliCommand = async (ctx, args) => {
       if (useApprovalRedis) {
         ctx.stdout.write(
           'Note: With --approval-redis, all serve instances share pending state via Redis (no file watcher needed).\n',
+        );
+      }
+      if (approvalFilePath) {
+        ctx.stdout.write(
+          'Approval resume: pending requests survive process restarts via the approval file; file store syncFromSnapshot resolves blocked gates.\n',
         );
       }
       if (envNotifiers.length > 0) {

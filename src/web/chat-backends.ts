@@ -19,6 +19,7 @@ import type { Registry } from '../core/registry.js';
 import type { ExecutionOptions } from '../core/execution.js';
 import type { ApprovalRequest } from '../core/approval.js';
 import { createAsyncEventQueue } from '../core/async-queue.js';
+import { buildLlmChatHistory } from '../agent/context.js';
 import type { ChatBackend, ChatMessage, ChatStreamEvent } from './chat-stream.js';
 
 /**
@@ -28,8 +29,9 @@ import type { ChatBackend, ChatMessage, ChatStreamEvent } from './chat-stream.js
 export const backendFromClaude = (adapter: ClaudeAdapter): ChatBackend => ({
   stream(message, history, options) {
     return (async function* () {
+      const trimmed = buildLlmChatHistory(history);
       const messages = [
-        ...history.map((m) => ({
+        ...trimmed.map((m) => ({
           role: m.role as 'user' | 'assistant',
           content: m.content,
         })),
@@ -64,8 +66,9 @@ export const backendFromClaude = (adapter: ClaudeAdapter): ChatBackend => ({
 export const backendFromOpenAi = (adapter: OpenAiAdapter): ChatBackend => ({
   stream(message, history, options) {
     return (async function* () {
+      const trimmed = buildLlmChatHistory(history);
       const messages: OpenAiChatMessage[] = [
-        ...history.map((entry) => ({
+        ...trimmed.map((entry) => ({
           role: entry.role,
           content: entry.content,
         })),
@@ -153,7 +156,10 @@ export const backendFromPiAgent = (deps: PiChatBackendDeps): ChatBackend => ({
         { ...deps.agentOptions, harness: undefined },
       );
 
-      agent.state.messages = chatHistoryToAgentMessages(history, agent.state.model);
+      agent.state.messages = chatHistoryToAgentMessages(
+        buildLlmChatHistory(history),
+        agent.state.model,
+      );
 
       const queue = createAsyncEventQueue<ChatStreamEvent>();
       const traceIds = new Set<string>([traceId]);
