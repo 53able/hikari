@@ -1,18 +1,10 @@
 import type { Registry } from '../core/registry.js';
 import type { Engine, ExecutionOptions } from '../core/execution.js';
-import {
-  CapabilityNotFoundError,
-  ValidationError,
-  IdempotencyConflictError,
-  IdempotencyRequiredError,
-} from '../core/execution.js';
-import { PolicyViolationError } from '../core/policy.js';
-import { ApprovalDeniedError } from '../core/approval.js';
+import { resolveExecutionError } from '../core/error-mapping.js';
 import { buildCapabilityMeta, buildRegistryMeta, type CapabilityMeta } from '../core/cap-meta.js';
 import {
   fieldsFromCapabilityMeta,
   formUrlEncodedToCapabilityInput,
-  FormBodyParseError,
 } from '../web/cap-form-schema.js';
 import { exportOpenApiDocument } from '../core/openapi-export.js';
 import type { RateLimitGuard } from '../core/rate-limit.js';
@@ -121,40 +113,8 @@ const readBodyText = async (req: Request, maxBytes: number): Promise<string> => 
 };
 
 const errorToResponse = (err: unknown): { status: number; body: unknown } => {
-  if (err instanceof CapabilityNotFoundError) {
-    return { status: 404, body: { error: { code: 'NOT_FOUND', message: err.message } } };
-  }
-  if (err instanceof ValidationError) {
-    return {
-      status: 400,
-      body: {
-        error: { code: 'VALIDATION_ERROR', message: err.message, issues: err.issues },
-      },
-    };
-  }
-  if (err instanceof FormBodyParseError) {
-    return { status: 400, body: { error: { code: 'VALIDATION_ERROR', message: err.message } } };
-  }
-  if (err instanceof PolicyViolationError) {
-    return { status: 403, body: { error: { code: 'FORBIDDEN', message: err.message } } };
-  }
-  if (err instanceof ApprovalDeniedError) {
-    return { status: 409, body: { error: { code: 'APPROVAL_DENIED', message: err.message } } };
-  }
-  if (err instanceof IdempotencyConflictError) {
-    return {
-      status: 409,
-      body: { error: { code: 'IDEMPOTENCY_CONFLICT', message: err.message } },
-    };
-  }
-  if (err instanceof IdempotencyRequiredError) {
-    return {
-      status: 400,
-      body: { error: { code: 'IDEMPOTENCY_REQUIRED', message: err.message } },
-    };
-  }
-  const message = err instanceof Error ? err.message : 'Internal server error';
-  return { status: 500, body: { error: { code: 'INTERNAL_ERROR', message } } };
+  const resolved = resolveExecutionError(err);
+  return { status: resolved.httpStatus, body: resolved.httpBody };
 };
 
 const pathnameFromRequest = (req: Request): string => new URL(req.url).pathname;

@@ -1,22 +1,11 @@
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { z } from 'zod';
-import type { ExecutionResult } from '../../core/execution.js';
 import type { IdempotencyRecord, IdempotencyStore } from '../../core/idempotency-store.js';
-
-const executionResultSchema = z.object({
-  success: z.literal(true),
-  output: z.unknown(),
-  traceId: z.string(),
-});
-
-const idempotencyLineSchema = z.object({
-  key: z.string(),
-  capabilityName: z.string(),
-  inputHash: z.string(),
-  result: executionResultSchema,
-  createdAt: z.number(),
-});
+import {
+  isIdempotencyRecordFresh,
+  parseIdempotencyLine,
+  serializeIdempotencyLine,
+} from '../idempotency-serialization.js';
 
 /** `createFileIdempotencyStore` のオプション。 */
 export type FileIdempotencyStoreOptions = {
@@ -40,7 +29,6 @@ export const createFileIdempotencyStore = (
   };
 
   const readEntries = async (): Promise<Map<string, IdempotencyRecord>> => {
-    const now = Date.now();
     const map = new Map<string, IdempotencyRecord>();
     let raw: string;
     try {
@@ -51,24 +39,9 @@ export const createFileIdempotencyStore = (
       throw err;
     }
     for (const line of raw.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const parsed = idempotencyLineSchema.parse(JSON.parse(trimmed));
-        if (now - parsed.createdAt > ttlMs) continue;
-        const result: ExecutionResult = {
-          success: true,
-          output: parsed.result.output,
-          traceId: parsed.result.traceId,
-        };
-        map.set(parsed.key, {
-          capabilityName: parsed.capabilityName,
-          inputHash: parsed.inputHash,
-          result,
-          createdAt: parsed.createdAt,
-        });
-      } catch {
-        // 破損行はスキップ
+      const parsed = parseIdempotencyLine(line, ttlMs);
+      if (parsed) {
+        map.set(parsed.key, parsed.record);
       }
     }
     return map;
@@ -79,18 +52,12 @@ export const createFileIdempotencyStore = (
       const entries = await readEntries();
       const record = entries.get(key);
       if (!record) return undefined;
-      if (Date.now() - record.createdAt > ttlMs) return undefined;
+      if (!isIdempotencyRecordFresh(record.createdAt, ttlMs)) return undefined;
       return record;
     },
     async set(key, record) {
       await ensureParent();
-      const line = JSON.stringify({
-        key,
-        capabilityName: record.capabilityName,
-        inputHash: record.inputHash,
-        result: record.result,
-        createdAt: record.createdAt,
-      });
+      const line = serializeIdempotencyLine(key, record);
       await appendFile(filePath, `${line}\n`, 'utf8');
     },
   };

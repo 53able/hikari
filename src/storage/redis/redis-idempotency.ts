@@ -1,20 +1,10 @@
-import { z } from 'zod';
 import type { HikariRedis } from './redis-client.js';
-import type { ExecutionResult } from '../../core/execution.js';
 import type { IdempotencyRecord, IdempotencyStore } from '../../core/idempotency-store.js';
-
-const executionResultSchema = z.object({
-  success: z.literal(true),
-  output: z.unknown(),
-  traceId: z.string(),
-});
-
-const storedRecordSchema = z.object({
-  capabilityName: z.string(),
-  inputHash: z.string(),
-  result: executionResultSchema,
-  createdAt: z.number(),
-});
+import {
+  isIdempotencyRecordFresh,
+  parseStoredIdempotencyJson,
+  serializeIdempotencyForRedis,
+} from '../idempotency-serialization.js';
 
 /** `createRedisIdempotencyStore` のオプション。 */
 export type RedisIdempotencyStoreOptions = {
@@ -41,35 +31,20 @@ export const createRedisIdempotencyStore = (
     async get(key) {
       const raw = await redis.get(recordKey(prefix, key));
       if (!raw) return undefined;
-      try {
-        const parsed = storedRecordSchema.parse(JSON.parse(raw));
-        if (Date.now() - parsed.createdAt > ttlMs) {
-          await redis.del(recordKey(prefix, key));
-          return undefined;
-        }
-        const result: ExecutionResult = {
-          success: true,
-          output: parsed.result.output,
-          traceId: parsed.result.traceId,
-        };
-        return {
-          capabilityName: parsed.capabilityName,
-          inputHash: parsed.inputHash,
-          result,
-          createdAt: parsed.createdAt,
-        };
-      } catch {
+      const record = parseStoredIdempotencyJson(raw, ttlMs);
+      if (!record) {
+        await redis.del(recordKey(prefix, key));
         return undefined;
       }
+      if (!isIdempotencyRecordFresh(record.createdAt, ttlMs)) {
+        await redis.del(recordKey(prefix, key));
+        return undefined;
+      }
+      return record;
     },
 
     async set(key, record) {
-      const payload = JSON.stringify({
-        capabilityName: record.capabilityName,
-        inputHash: record.inputHash,
-        result: record.result,
-        createdAt: record.createdAt,
-      });
+      const payload = serializeIdempotencyForRedis(record);
       await redis.set(recordKey(prefix, key), payload, { EX: ttlSeconds });
     },
   };

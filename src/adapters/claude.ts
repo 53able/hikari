@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { Registry } from '../core/registry.js';
+import { capabilitySchemaToJson } from '../core/cap-meta.js';
 import type { Engine, ExecutionOptions } from '../core/execution.js';
 import { serializeToolExecutionError } from '../core/tool-error.js';
 import { enrichExecutionOptionsWithIdempotency } from '../core/idempotency-key.js';
@@ -56,16 +56,11 @@ export function createClaudeAdapter(
   const client = new Anthropic({ apiKey });
 
   const getTools = (): Anthropic.Tool[] =>
-    registry.listForLlm().map((cap) => {
-      const jsonSchema = zodToJsonSchema(cap.inputSchema, { target: 'openApi3' });
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { $schema, ...inputSchema } = jsonSchema as Record<string, unknown>;
-      return {
-        name: cap.name,
-        description: cap.description,
-        input_schema: inputSchema as Anthropic.Tool['input_schema'],
-      };
-    });
+    registry.listForLlm().map((cap) => ({
+      name: cap.name,
+      description: cap.description,
+      input_schema: capabilitySchemaToJson(cap.inputSchema) as Anthropic.Tool['input_schema'],
+    }));
 
   const chat = async (
     messages: Anthropic.MessageParam[],

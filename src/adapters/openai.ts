@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { Registry } from '../core/registry.js';
+import { capabilitySchemaToJson } from '../core/cap-meta.js';
 import type { Engine } from '../core/execution.js';
 import { serializeToolExecutionError } from '../core/tool-error.js';
 import { enrichExecutionOptionsWithIdempotency } from '../core/idempotency-key.js';
@@ -47,19 +47,14 @@ export const createOpenAiAdapter = (
   const client = new OpenAI({ apiKey });
 
   const getTools = (): OpenAI.Chat.Completions.ChatCompletionTool[] =>
-    registry.listForLlm().map((cap) => {
-      const jsonSchema = zodToJsonSchema(cap.inputSchema, { target: 'openApi3' });
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { $schema, ...parameters } = jsonSchema as Record<string, unknown>;
-      return {
-        type: 'function',
-        function: {
-          name: cap.name,
-          description: cap.description,
-          parameters,
-        },
-      };
-    });
+    registry.listForLlm().map((cap) => ({
+      type: 'function' as const,
+      function: {
+        name: cap.name,
+        description: cap.description,
+        parameters: capabilitySchemaToJson(cap.inputSchema),
+      },
+    }));
 
   const toApiMessages = (
     messages: readonly OpenAiChatMessage[],

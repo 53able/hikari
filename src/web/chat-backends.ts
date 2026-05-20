@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ClaudeAdapter } from '../adapters/claude.js';
-import type { OpenAiAdapter, OpenAiChatMessage } from '../adapters/openai.js';
+import type { OpenAiAdapter } from '../adapters/openai.js';
 import {
   createHikariAgent,
   chatHistoryToAgentMessages,
@@ -20,97 +20,36 @@ import type { ExecutionOptions } from '../core/execution.js';
 import type { ApprovalRequest } from '../core/approval.js';
 import { createAsyncEventQueue } from '../core/async-queue.js';
 import { buildLlmChatHistory } from '../agent/context.js';
-import type { ChatBackend, ChatMessage, ChatStreamEvent } from './chat-stream.js';
+import { createLlmChatBackend } from './llm-chat-backend.js';
+import type { ChatBackend, ChatStreamEvent } from './chat-stream.js';
 
 /**
  * `ClaudeAdapter` を `ChatBackend` としてラップする。
- * 非ストリーミングの `chat()` を呼び出し、全テキストを単一の `text_delta` イベントとして emit する。
  */
-export const backendFromClaude = (adapter: ClaudeAdapter): ChatBackend => ({
-  stream(message, history, options) {
-    return (async function* () {
-      const trimmed = buildLlmChatHistory(history);
-      const messages = [
-        ...trimmed.map((m) => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-        })),
-        { role: 'user' as const, content: message },
-      ];
-      try {
-        const result = await adapter.chat(messages, {
-          userId: options.userId,
-          sessionId: options.sessionId,
-          traceId: options.traceId,
-          intent: options.intent,
-          permissions: options.permissions,
-        });
-        if (result.content) {
-          yield { type: 'text_delta' as const, delta: result.content };
-        }
-        yield { type: 'done' as const, traceIds: result.traceIds };
-      } catch (err) {
-        yield {
-          type: 'error' as const,
-          message: err instanceof Error ? err.message : String(err),
-        };
-      }
-    })();
-  },
-});
+export const backendFromClaude = (adapter: ClaudeAdapter): ChatBackend =>
+  createLlmChatBackend((messages, options) => adapter.chat([...messages], options));
 
 /**
  * `OpenAiAdapter` を `ChatBackend` としてラップする。
- * 非ストリーミングの `chat()` を呼び出し、全テキストを単一の `text_delta` イベントとして emit する。
  */
-export const backendFromOpenAi = (adapter: OpenAiAdapter): ChatBackend => ({
-  stream(message, history, options) {
-    return (async function* () {
-      const trimmed = buildLlmChatHistory(history);
-      const messages: OpenAiChatMessage[] = [
-        ...trimmed.map((entry) => ({
-          role: entry.role,
-          content: entry.content,
-        })),
-        { role: 'user', content: message },
-      ];
-      try {
-        const result = await adapter.chat(messages, {
-          userId: options.userId,
-          sessionId: options.sessionId,
-          traceId: options.traceId,
-          intent: options.intent,
-          permissions: options.permissions,
-        });
-        if (result.content) {
-          yield { type: 'text_delta' as const, delta: result.content };
-        }
-        yield { type: 'done' as const, traceIds: result.traceIds };
-      } catch (err) {
-        yield {
-          type: 'error' as const,
-          message: err instanceof Error ? err.message : String(err),
-        };
-      }
-    })();
-  },
-});
+export const backendFromOpenAi = (adapter: OpenAiAdapter): ChatBackend =>
+  createLlmChatBackend((messages, options) => adapter.chat([...messages], options));
 
 /** `backendFromPiAgent` の依存関係。リクエストごとに Agent を生成しコンテキスト漏洩を防ぐ。 */
 export interface PiChatBackendDeps {
-  registry: Registry;
-  engine: Engine;
+  readonly registry: Registry;
+  readonly engine: Engine;
   /**
    * `createHikariHarness` の戻り値。指定時は intent / plan をチャットターン単位で記録し、
    * engine は `tool-only` harness モードで動作する。
    */
-  harnessApi?: HikariHarness;
-  agentOptions?: HikariAgentOptions;
+  readonly harnessApi?: HikariHarness;
+  readonly agentOptions?: HikariAgentOptions;
   /**
    * ストリーム単位で承認待ち通知を登録する。
    * @returns ストリーム終了時に呼ぶ解除関数。
    */
-  onRegisterApprovalNotifier?: (
+  readonly onRegisterApprovalNotifier?: (
     traceId: string,
     notify: (req: ApprovalRequest) => void,
   ) => (() => void) | void;
