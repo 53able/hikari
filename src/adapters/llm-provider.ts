@@ -153,6 +153,8 @@ export type ResolvedServeChatBackend = {
 /**
  * `hikari serve` 用の `ChatBackend` を環境変数から解決する。
  *
+ * Pi 経路のモデルは `HIKARI_PI_PROVIDER` / `HIKARI_PI_MODEL`（`createHikariAgent`）で上書き可能。
+ *
  * - `LLM_PROVIDER=pi`（既定）→ Pi harness + Hikari エンジン
  * - `LLM_PROVIDER=anthropic` → `createClaudeAdapter`
  * - `LLM_PROVIDER=openai` → `createOpenAiAdapter`
