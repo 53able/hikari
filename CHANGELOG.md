@@ -1,3 +1,17 @@
+# [1.0.0](https://github.com/53able/hikari/compare/v0.3.0...v1.0.0) (2026-05-20)
+
+
+* feat!: idempotency keys and capability-first realignment ([#15](https://github.com/53able/hikari/issues/15)) ([15da5cf](https://github.com/53able/hikari/commit/15da5cf34b77408b9c0a1ac4b48985a9b8dd7654))
+
+
+### BREAKING CHANGES
+
+* engine.execute and HTTP POST for write/financial capabilities now reject requests without an idempotency key.
+
+- Bundle default agent prompts under src/prompts with loadPrompt()
+- Auto-assign idempotencyKey on Pi, Claude, OpenAI tool calls and devtools invoker
+- Web Standard / Pi harness / SSE / subpath exports
+
 # Unreleased
 
 ### Features
